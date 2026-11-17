@@ -135,8 +135,8 @@ export class FaceEngine {
     const w = Math.min(W - x, box.w * (1 + 2 * m));
     const h = Math.min(H - y, box.h * (1 + 2 * m));
     const scale = Math.min(1, 320 / Math.max(w, h));
-    if (!this._cropCanvas) this._cropCanvas = document.createElement('canvas');
-    const c = this._cropCanvas;
+    // Her çağrı kendi tuvalini kullanır: canlı doğrulama ve hızlı kayıt aynı anda çalışabilir
+    const c = document.createElement('canvas');
     c.width = Math.round(w * scale); c.height = Math.round(h * scale);
     const ctx = c.getContext('2d', { willReadFrequently: true });
     ctx.drawImage(source, x, y, w, h, 0, 0, c.width, c.height);

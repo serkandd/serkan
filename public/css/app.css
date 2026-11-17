@@ -214,3 +214,11 @@ dialog::backdrop { background: rgba(0,0,0,.6); }
 .toast.ok { border-left-color: var(--ok); }
 .toast.warn { border-left-color: var(--warn); }
 @keyframes tin { from { opacity: 0; transform: translateY(8px); } }
+
+/* Canlı görüntüden hızlı kişi kaydı */
+.quick-enroll { margin: 0 12px; display: grid; gap: 6px; background: var(--card); border: 1px solid var(--primary); border-radius: 12px; padding: 10px; }
+.qe-label { font-weight: 700; color: var(--text); font-size: .9rem; }
+.qe-row { display: flex; gap: 8px; }
+.qe-row input { flex: 1; min-width: 0; }
+.quick-enroll p { margin: 0; }
+.quick-enroll.known { border-color: var(--ok); }

@@ -193,6 +193,22 @@ try {
   check('Aynı plaka tekrar tekrar kaydedilmez', plateEvents === 1, `${plateEvents} kayıt`);
   check('Plaka olmayan desenler (jaluzi vb.) "okunamadı" olayı üretmez', !/Okunamadı/.test(recentAll));
 
+  // Canlı görüntüden hızlı kayıt: en büyük yüz "Serkan Bilge" olarak kaydedilir ve tanınır
+  await page.waitForSelector('#quick-enroll:not([hidden])', { timeout: 20_000 }).catch(() => {});
+  const qeVisible = await page.$eval('#quick-enroll', (el) => !el.hidden);
+  check('Yüz görülünce isim alanı çıkar', qeVisible);
+  if (qeVisible) {
+    await page.fill('#qe-name', 'Serkan Bilge');
+    await page.click('#qe-save');
+    await page.waitForFunction(() => /kaydedildi|Kaydedilemedi/.test(document.querySelector('#qe-msg').textContent), null, { timeout: 120_000 }).catch(() => {});
+    const qeMsg = await page.$eval('#qe-msg', (el) => el.textContent);
+    check('Canlı görüntüden yüz kaydı', /kaydedildi/.test(qeMsg), qeMsg);
+    await page.waitForFunction(() => window.__analyzer.faceTracker.tracks.some((t) => t.data.person?.fullName === 'Serkan Bilge'), null, { timeout: 150_000 }).catch(() => {});
+    const named = await page.evaluate(() => window.__analyzer.faceTracker.tracks.filter((t) => t.data.person).map((t) => t.data.person.fullName));
+    check('Kaydedilen kişi kamerada adıyla tanınır', named.includes('Serkan Bilge'), JSON.stringify(named));
+    await page.screenshot({ path: join(out, '06-quick-enroll.png') });
+  }
+
   const overflow = await page.evaluate(() => ({ sw: document.body.scrollWidth, w: window.innerWidth, ctl: [...document.querySelectorAll('.controls .ctl')].every((b) => b.getBoundingClientRect().right <= window.innerWidth) }));
   check('Telefon genişliğinde (412px) yatay taşma yok', overflow.sw <= overflow.w && overflow.ctl, JSON.stringify(overflow));
   const perf = await page.$eval('#chip-perf', (el) => el.textContent);

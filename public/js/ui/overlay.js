@@ -107,7 +107,8 @@ export class Overlay {
         title = `${track.id} · ${track.data.person.fullName}`;
         sub = `${res.label} · %${Math.round((track.data.confidence || 0) * 100)}`;
       }
-      this.label(r.x, r.y, title, color, '#0b1220', 13);
+      // Tanınan kişinin adı büyük yazılır
+      this.label(r.x, r.y, title, color, '#0b1220', track.data.person && track.data.decided ? 17 : 13);
       if (sub) this.label(r.x, r.y + r.h + 2, sub, 'rgba(15,23,42,0.85)', '#f8fafc', 11, true);
       ctx.globalAlpha = 1;
     }

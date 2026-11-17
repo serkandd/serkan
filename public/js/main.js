@@ -449,7 +449,89 @@ const RESULT_COLOR = {
   unreadable: 'muted',
 };
 
+/* ============================================== CANLI GÖRÜNTÜDEN HIZLI KAYIT */
+
+/** Kayıt için hedef yüz: kadrajdaki en büyük, şu an görülen yüz */
+function enrollTarget() {
+  const a = state.analyzer;
+  if (!a) return null;
+  return a.faceTracker.tracks
+    .filter((t) => t.confirmed && performance.now() - t.lastSeen < 2500)
+    .sort((x, y) => y.box.w - x.box.w)[0] || null;
+}
+
+function updateQuickEnroll() {
+  const form = $('#quick-enroll');
+  const typing = document.activeElement === $('#qe-name') || $('#qe-name').value.trim();
+  const busy = form.dataset.busy === '1';
+  const running = state.camera?.isRunning && state.analyzer?.faceEnabled;
+  if (!running || !auth.can('personnel')) { form.hidden = true; return; }
+  const t = enrollTarget();
+  if (!t && !typing && !busy) { form.hidden = true; return; }
+  form.hidden = false;
+  if (busy || typing) return;
+  const known = t?.data.decided && t.data.person;
+  form.classList.toggle('known', !!known);
+  $('#qe-msg').textContent = known
+    ? `Tanındı: ${t.data.person.fullName}. Başka biri için ad yazıp kaydedebilirsiniz.`
+    : 'Kameraya önden bakın. Adınızı yazıp Kaydet\'e basın; sonra sizi bu isimle tanır.';
+}
+
+$('#quick-enroll').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const name = $('#qe-name').value.trim().replace(/\s+/g, ' ');
+  const msg = $('#qe-msg');
+  if (name.length < 2) { msg.textContent = 'Lütfen bir ad yazın.'; return; }
+  if (!state.face?.recognitionReady) { msg.textContent = 'Yüz tanıma modeli yüklenemedi.'; return; }
+  form.dataset.busy = '1';
+  $('#qe-save').disabled = true;
+  try {
+    // Kısa sürede birkaç kare topla: farklı ifadeler/açılar tanımayı güçlendirir
+    const descriptors = [];
+    let lastReason = 'Yüz görünmüyor';
+    const t0 = performance.now();
+    while (descriptors.length < 3 && performance.now() - t0 < 6000) {
+      const t = enrollTarget();
+      if (!t) { lastReason = 'Yüz görünmüyor'; await new Promise((r) => setTimeout(r, 300)); continue; }
+      msg.textContent = `Yüz kaydediliyor… (${descriptors.length}/3) Kameraya bakmaya devam edin.`;
+      const r = await state.face.describe($('#video'), t.predict(performance.now()), { minSize: 60, minScore: 0.6 });
+      if (r.descriptor) descriptors.push(Array.from(r.descriptor));
+      else lastReason = r.quality.reason || 'Görüntü yeterince net değil';
+      await new Promise((res) => setTimeout(res, 350));
+    }
+    if (!descriptors.length) throw new Error(`Kaydedilemedi: ${lastReason}. Kameraya daha yakın ve önden bakın.`);
+
+    const existing = repo.personnel().find((p) => p.fullName.toLocaleLowerCase('tr') === name.toLocaleLowerCase('tr'));
+    const me = auth.currentUser().username;
+    await repo.savePersonnel({
+      ...(existing || {}),
+      id: existing?.id,
+      employeeNo: existing?.employeeNo || `K-${Date.now().toString(36).toUpperCase()}`,
+      fullName: name,
+      department: existing?.department || '',
+      status: existing?.status || 'authorized',
+      consent: { informed: true, legalBasis: 'Canlı kamera ile yerinde kayıt (kişinin kendi onayıyla)', recordedAt: Date.now(), by: me },
+      descriptors: [...(existing?.descriptors || []), ...descriptors].slice(-10),
+    });
+    // Ekrandaki yüzler yeni kayda göre hemen yeniden doğrulansın
+    for (const tr of state.analyzer.faceTracker.tracks) tr.data = {};
+    $('#qe-name').value = '';
+    $('#qe-name').blur();
+    msg.textContent = `${name} kaydedildi (${descriptors.length} yüz örneği). Birkaç saniye içinde tanınacaksınız.`;
+    toast(`${name} kaydedildi`, 'ok');
+    renderPersonnel();
+  } catch (ex) {
+    msg.textContent = ex.message;
+  } finally {
+    form.dataset.busy = '';
+    $('#qe-save').disabled = false;
+  }
+});
+
 function wireAnalyzer() {
+  setInterval(updateQuickEnroll, 400);
+
   const a = state.analyzer;
   a.addEventListener('status', (e) => {
     for (const k of ['face', 'plate']) {

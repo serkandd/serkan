@@ -189,6 +189,8 @@ export class Analyzer extends EventTarget {
     const t0 = performance.now();
     const { descriptor, quality } = await this.face.describe(this.video, box, { minSize: s.faceMinSizePx, minScore: s.faceMinScore });
     this.perf.record('faceDescribe', performance.now() - t0);
+    // Beklerken iz sıfırlanmış olabilir (ör. yeni kişi kaydı sonrası): bu sonucu atla
+    if (!t.data.consensus) return;
     t.data.quality = quality;
     if (!descriptor) {
       if (!t.data.decided) t.data.result = { ...FACE_RESULT.LOW_QUALITY, label: `Kalite yetersiz: ${quality.reason}` };

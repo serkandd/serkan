@@ -78,6 +78,15 @@
           </div>
         </div>
 
+        <form id="quick-enroll" class="quick-enroll" hidden autocomplete="off">
+          <label for="qe-name" class="qe-label">Görülen kişiyi kaydet</label>
+          <div class="qe-row">
+            <input id="qe-name" name="name" placeholder="Ad Soyad (örn. Serkan Bilge)" maxlength="80" required autocapitalize="words">
+            <button class="btn primary" type="submit" id="qe-save">Kaydet</button>
+          </div>
+          <p id="qe-msg" class="tiny muted">Kameraya önden bakın. Yüzünüz kaydedilir, sonra sizi bu isimle tanır.</p>
+        </form>
+
         <div class="counters">
           <div><span id="cnt-faces">0</span><small>Yüz</small></div>
           <div><span id="cnt-plates">0</span><small>Plaka</small></div>
