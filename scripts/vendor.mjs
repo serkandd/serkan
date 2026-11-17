@@ -40,7 +40,9 @@ for (const f of readdirSync(join(nm, 'tesseract.js-core'))) {
   // Yalnızca LSTM çekirdekleri (gömülü wasm içeren .wasm.js dosyaları)
   if (/^tesseract-core.*lstm\.wasm\.js$/.test(f)) copy(`tesseract.js-core/${f}`, `vendor/tesseract/core/${f}`);
 }
-copy('@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz', 'vendor/tesseract/lang/eng.traineddata.gz');
+// Android paketleyicisi .gz uzantılı varlıkları APK'ya almadığından dosya ".wasm" ekiyle saklanır
+// (bkz. js/workers/tesseract-worker.js)
+copy('@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz', 'vendor/tesseract/lang/eng.traineddata.gz.wasm');
 
 console.log('ONNX Runtime Web (WASM, SIMD + çoklu iş parçacığı)');
 copy('onnxruntime-web/dist/ort.wasm.min.mjs', 'vendor/ort/ort.wasm.min.mjs');

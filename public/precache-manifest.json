@@ -1,5 +1,5 @@
 {
- "version": 1794928079832,
+ "version": 1794928855446,
  "files": [
   "css/app.css",
   "icons/icon-192.png",
@@ -49,7 +49,7 @@
   "vendor/tesseract/core/tesseract-core-lstm.wasm.js",
   "vendor/tesseract/core/tesseract-core-relaxedsimd-lstm.wasm.js",
   "vendor/tesseract/core/tesseract-core-simd-lstm.wasm.js",
-  "vendor/tesseract/lang/eng.traineddata.gz",
+  "vendor/tesseract/lang/eng.traineddata.gz.wasm",
   "vendor/tesseract/tesseract.esm.min.js",
   "vendor/tesseract/worker.min.js"
  ]
