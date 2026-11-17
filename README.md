@@ -20,7 +20,18 @@ görüntü analiz uygulaması. Telefon kamerasından gelen canlı görüntüyü 
 > Yapay zekâ sonuçları **karar destek** amaçlıdır. Kritik uyarılar görevlinin "Doğru – onayla / Hatalı algılama"
 > işaretlemesiyle kayda geçer; sistem tek başına güvenlik kararı vermez.
 
-## Hızlı Başlangıç
+## Telefona Kurulum (Android uygulaması)
+
+**İndir:** https://github.com/serkandd/serkan/releases/download/android-latest/GuvenlikAsistani.apk
+
+1. Linki Samsung telefonda açın, APK iner.
+2. İndirilen dosyaya dokunun. "Bilinmeyen kaynaklardan yükleme" izni sorulursa *Ayarlar → Bu kaynaktan izin ver*.
+3. *Yükle* → *Aç*. İlk açılışta yönetici hesabını oluşturun ve kamera iznine bir kez *İzin ver* deyin.
+4. Sonraki açılışlarda giriş yaptıktan sonra kamera doğrudan açılır ve analiz başlar.
+
+APK, depoya her yeni sürüm gönderildiğinde GitHub Actions tarafından otomatik derlenir (`.github/workflows/android.yml`).
+
+## Hızlı Başlangıç (web)
 
 ```bash
 npm install          # bağımlılıkları kurar ve kütüphaneleri/modelleri public/ altına kopyalar
