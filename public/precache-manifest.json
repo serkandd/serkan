@@ -1,5 +1,5 @@
 {
- "version": 1794925440275,
+ "version": 1794925984029,
  "files": [
   "css/app.css",
   "icons/icon-192.png",
@@ -27,8 +27,10 @@
   "js/ui/alerts.js",
   "js/ui/dom.js",
   "js/ui/overlay.js",
+  "js/util/fetch-binary.js",
   "js/vision/imgproc.js",
   "js/workers/plate-worker.js",
+  "js/workers/tesseract-worker.js",
   "manifest.webmanifest",
   "models/face/face_landmark_68_model-weights_manifest.json",
   "models/face/face_landmark_68_model.bin",

@@ -367,28 +367,38 @@ function updateCameraUi(info) {
   $('#video').classList.toggle('mirror', mirror);
   state.overlay.mirror = mirror;
   const mp = ((info.width * info.height) / 1e6).toFixed(1);
-  $('#camera-info').textContent = `${info.label || 'Kamera'} · ${info.width}×${info.height} (${mp} MP) · ${Math.round(info.frameRate || 0)} fps`
+  $('#camera-info').textContent = `${info.label || 'Kamera'} · ${info.width}×${info.height} (${mp} MP)${info.isFile ? '' : ` · ${Math.round(info.frameRate || 0)} fps`}`
     + (info.width < 1920 ? ' · Uyarı: düşük çözünürlük 10 m mesafede okumayı zorlaştırır.' : '');
   populateCameraSelect();
 }
 
-async function startCamera() {
+async function startCamera(file = null) {
   try {
     $('#btn-camera').disabled = true;
-    await state.camera.start({ resolution: state.settings.resolution });
+    if (file) await state.camera.startFile(file);
+    else await state.camera.start({ resolution: state.settings.resolution });
     $('#stage-empty').hidden = true;
     state.analyzer.start();
     state.overlay.start();
     $('#btn-camera').classList.add('running');
     $('#btn-camera span').textContent = 'Durdur';
-    await repo.audit('camera.start', 'camera', { resolution: state.settings.resolution });
+    await repo.audit('camera.start', 'camera', file ? { source: 'video-file' } : { resolution: state.settings.resolution });
     acquireWakeLock();
   } catch (e) {
-    toast(e.message, 'error', 8000);
+    toast(e.message + (file ? '' : ' Alternatif: "Video çek / seç ve analiz et" düğmesini kullanın.'), 'error', 9000);
   } finally {
     $('#btn-camera').disabled = false;
   }
 }
+
+$('#media-file').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  state.alerts.unlock();
+  stopCamera();
+  await startCamera(file);
+});
 
 function stopCamera() {
   state.analyzer?.stop();

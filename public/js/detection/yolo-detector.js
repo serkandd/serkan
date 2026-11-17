@@ -8,6 +8,7 @@
  * Model çıktısı biçimi: [1, 4 + sınıfSayısı, N]  (cx, cy, w, h, sınıf skorları...)
  */
 import { nms } from '../vision/imgproc.js';
+import { fetchBinary } from '../util/fetch-binary.js';
 
 let ortPromise = null;
 
@@ -59,7 +60,7 @@ export class YoloDetector {
 
   async load() {
     this.ort = await loadOrt();
-    this.session = await this.ort.InferenceSession.create(this.url, {
+    this.session = await this.ort.InferenceSession.create(await fetchBinary(this.url), {
       executionProviders: ['wasm'],
       graphOptimizationLevel: 'all',
     });

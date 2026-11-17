@@ -70,7 +70,32 @@ export class CameraManager extends EventTarget {
   }
 
   get isRunning() {
-    return !!this.track && this.track.readyState === 'live';
+    return (!!this.track && this.track.readyState === 'live') || (this.isFile && !!this.fileUrl);
+  }
+
+  /**
+   * Kayıtlı video dosyasını canlı kaynak gibi oynatır (kamera izni olmayan ortamlar ve
+   * çekilmiş görüntülerin sonradan incelenmesi için). Video döngüde oynatılır.
+   */
+  async startFile(file) {
+    this.stop();
+    this.fileUrl = URL.createObjectURL(file);
+    this.fileName = file.name || 'video';
+    this.isFile = true;
+    const v = this.video;
+    v.srcObject = null;
+    v.muted = true;
+    v.playsInline = true;
+    v.loop = true;
+    v.src = this.fileUrl;
+    await new Promise((resolve, reject) => {
+      v.addEventListener('loadeddata', resolve, { once: true });
+      v.addEventListener('error', () => reject(new CameraError('file', 'Video açılamadı. MP4 veya WebM biçiminde bir video seçin.')), { once: true });
+      setTimeout(resolve, 8000);
+    });
+    await v.play().catch(() => {});
+    this.dispatchEvent(new CustomEvent('started', { detail: this.info() }));
+    return this.info();
   }
 
   get isFront() {
@@ -152,6 +177,12 @@ export class CameraManager extends EventTarget {
   }
 
   info() {
+    if (this.isFile) {
+      return {
+        width: this.video.videoWidth, height: this.video.videoHeight, frameRate: 0, facingMode: 'environment',
+        label: `Video dosyası: ${this.fileName}`, zoomRange: null, torch: false, torchOn: false, isFile: true,
+      };
+    }
     const s = this.track?.getSettings?.() || {};
     this.settings = s;
     return {
@@ -225,7 +256,13 @@ export class CameraManager extends EventTarget {
     if (this.stream) for (const t of this.stream.getTracks()) t.stop();
     this.stream = null;
     this.track = null;
-    if (this.video) this.video.srcObject = null;
+    if (this.video) {
+      this.video.srcObject = null;
+      if (this.isFile) { this.video.removeAttribute('src'); this.video.load(); }
+    }
+    if (this.fileUrl) URL.revokeObjectURL(this.fileUrl);
+    this.fileUrl = null;
+    this.isFile = false;
     this._stopping = false;
   }
 }

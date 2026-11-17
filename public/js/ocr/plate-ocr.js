@@ -27,7 +27,7 @@ export class PlateOcr {
     this.scheduler = Tesseract.createScheduler();
     for (let i = 0; i < workers; i++) {
       const w = await Tesseract.createWorker('eng', 1, {
-        workerPath: `${BASE}worker.min.js`,
+        workerPath: new URL('../workers/tesseract-worker.js', import.meta.url).href,
         corePath: `${BASE}core`,
         langPath: `${BASE}lang`,
         gzip: true,
