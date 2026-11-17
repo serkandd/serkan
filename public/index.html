@@ -26,20 +26,23 @@
   <!-- Kurulum ve giriş -->
   <section id="auth" class="screen" hidden>
     <form id="setup-form" class="card auth-card" hidden autocomplete="off">
-      <h1>İlk Kurulum</h1>
-      <p class="muted">Bu cihazdaki kayıtlar yönetici parolasından türetilen anahtarla şifrelenir. Parola unutulursa veriler kurtarılamaz.</p>
-      <label>Yönetici kullanıcı adı<input name="username" required minlength="3" autocapitalize="none" value="yonetici"></label>
-      <label>Parola<input name="password" type="password" required minlength="8" autocomplete="new-password"></label>
-      <label>Parola (tekrar)<input name="password2" type="password" required minlength="8" autocomplete="new-password"></label>
-      <button class="btn primary big" type="submit">Kurulumu Tamamla</button>
+      <h1>PIN Belirleyin</h1>
+      <p class="muted">Uygulamaya girişte kullanılacak 4 haneli PIN. Kayıtlar bu PIN ile şifrelenir; unutulursa uygulama sıfırlanmadan açılamaz.</p>
+      <label>PIN (4 rakam)<input name="password" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required autocomplete="new-password" class="pin-input"></label>
+      <label>PIN (tekrar)<input name="password2" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required autocomplete="new-password" class="pin-input"></label>
+      <button class="btn primary big" type="submit">Devam</button>
       <p class="error" data-error></p>
     </form>
     <form id="login-form" class="card auth-card" hidden>
-      <h1>Giriş</h1>
-      <label>Kullanıcı adı<input name="username" required autocapitalize="none" autocomplete="username"></label>
-      <label>Parola<input name="password" type="password" required autocomplete="current-password"></label>
-      <button class="btn primary big" type="submit">Giriş Yap</button>
+      <h1>PIN Girin</h1>
+      <label>4 haneli PIN<input name="password" type="password" inputmode="numeric" maxlength="4" required autocomplete="current-password" class="pin-input"></label>
+      <button class="btn primary big" type="submit">Giriş</button>
       <p class="error" data-error></p>
+      <p class="muted tiny" data-legacy-note hidden>Eski parolanızla girdikten sonra Ayarlar → PIN Değiştir'den 4 haneli PIN belirleyin.</p>
+      <div class="row wrap auth-links">
+        <button class="linkbtn" type="button" data-action="legacy-password">Eski harfli parolam var</button>
+        <button class="linkbtn" type="button" data-action="factory-reset">PIN'imi unuttum</button>
+      </div>
     </form>
   </section>
 
@@ -78,14 +81,10 @@
           </div>
         </div>
 
-        <form id="quick-enroll" class="quick-enroll" hidden autocomplete="off">
-          <label for="qe-name" class="qe-label">Görülen kişiyi kaydet</label>
-          <div class="qe-row">
-            <input id="qe-name" name="name" placeholder="Ad Soyad (örn. Serkan Bilge)" maxlength="80" required autocapitalize="words">
-            <button class="btn primary" type="submit" id="qe-save">Kaydet</button>
-          </div>
-          <p id="qe-msg" class="tiny muted">Kameraya önden bakın. Yüzünüz kaydedilir, sonra sizi bu isimle tanır.</p>
-        </form>
+        <div id="quick-enroll" class="quick-enroll" hidden>
+          <button class="btn primary big" type="button" id="qe-capture">Yüzümü kaydet</button>
+          <p id="qe-hint" class="tiny muted">Kameraya önden bakıp düğmeye basın. Görüntü dondurulur, sonra adınızı yazarsınız.</p>
+        </div>
 
         <div class="counters">
           <div><span id="cnt-faces">0</span><small>Yüz</small></div>
@@ -158,7 +157,8 @@
           <h2>Kayıtlı Araçlar</h2>
           <button class="btn primary" type="button" data-action="vehicle-new">+ Yeni</button>
         </div>
-        <input type="search" id="vehicle-search" placeholder="Plaka, sahip veya şirket ara" aria-label="Araç ara">
+        <input type="search" id="vehicle-search" placeholder="Plaka, sahip, şirket, marka veya renk ara" aria-label="Araç ara">
+        <p class="muted tiny" id="vehicle-pending"></p>
         <ul id="vehicle-list" class="rec-list"></ul>
       </div>
 
@@ -171,18 +171,18 @@
           <h3>Kullanıcılar</h3>
           <ul id="users-list" class="rec-list compact"></ul>
           <form id="user-form" class="grid2">
-            <input name="username" placeholder="Kullanıcı adı" required autocapitalize="none">
-            <input name="password" type="password" placeholder="Parola (en az 8)" required autocomplete="new-password">
+            <input name="username" placeholder="Ad (örn. Gece görevlisi)" required>
+            <input name="password" type="password" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" placeholder="4 haneli PIN" required autocomplete="new-password">
             <select name="role"><option value="operator">Güvenlik Görevlisi</option><option value="admin">Yönetici</option></select>
             <button class="btn" type="submit">Kullanıcı Ekle</button>
           </form>
         </section>
 
         <section class="card stack">
-          <h3>Parolamı Değiştir</h3>
+          <h3>PIN Değiştir</h3>
           <form id="password-form" class="grid2">
-            <input name="old" type="password" placeholder="Mevcut parola" required autocomplete="current-password">
-            <input name="new" type="password" placeholder="Yeni parola" required autocomplete="new-password">
+            <input name="old" type="password" placeholder="Mevcut PIN / parola" required autocomplete="current-password">
+            <input name="new" type="password" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" placeholder="Yeni 4 haneli PIN" required autocomplete="new-password">
             <button class="btn" type="submit">Değiştir</button>
           </form>
         </section>
@@ -234,7 +234,7 @@
       </label>
       <fieldset class="stack">
         <legend>Biyometrik doğrulama şablonu</legend>
-        <p class="muted tiny">Fotoğraf yalnızca yüz şablonu (128 sayı) çıkarmak için cihazda işlenir ve <b>saklanmaz</b>. Daha iyi doğruluk için farklı açılardan 2-3 net fotoğraf ekleyin.</p>
+        <p class="muted tiny">Fotoğraftan yüz şablonu (128 sayı) ve küçük bir yüz resmi çıkarılır; şifreli olarak yalnızca bu cihazda saklanır. Daha iyi doğruluk için farklı açılardan 2-3 net fotoğraf ekleyin.</p>
         <label class="check"><input type="checkbox" name="informed"> İlgili kişi biyometrik verisinin işlenmesi hakkında aydınlatıldı ve gerekli hukuki şartlar (açık rıza veya kanuni dayanak) sağlandı.</label>
         <label>Hukuki dayanak / açık rıza belgesi referansı
           <input name="legalBasis" placeholder="ör. KVKK m.6 açık rıza, belge no: 2026/145">
@@ -264,14 +264,26 @@
     <form method="dialog" id="vehicle-form" class="stack">
       <h2 data-title>Araç Kaydı</h2>
       <input type="hidden" name="id">
-      <label>Plaka *<input name="plate" required placeholder="34 ABC 123" autocapitalize="characters" autocomplete="off"></label>
-      <label>Araç sahibi<input name="owner" autocomplete="off"></label>
-      <label>Bağlı olduğu şirket<input name="company"></label>
-      <label>Açıklama (marka, model, renk…)<input name="description"></label>
+      <div class="vehicle-photos" id="vehicle-photos" hidden></div>
+      <p class="muted tiny" id="vehicle-seen"></p>
+      <label>Plaka * <span class="tiny muted">(yanlış okunduysa düzeltin)</span><input name="plate" required placeholder="34 ABC 123" autocapitalize="characters" autocomplete="off"></label>
+      <label>Aracı kullanan (Ad Soyad)<input name="owner" autocomplete="off" autocapitalize="words"></label>
+      <label>Bağlı olduğu şirket<input name="company" autocapitalize="words"></label>
+      <div class="grid2">
+        <label>Marka<input name="brand" list="brand-list" autocapitalize="words" placeholder="örn. Renault"></label>
+        <label>Model<input name="model" autocapitalize="words" placeholder="örn. Clio"></label>
+        <label>Renk<input name="color" list="color-list" autocapitalize="words"></label>
+        <label>Tür<input name="vehicleType" list="type-list" autocapitalize="words"></label>
+      </div>
+      <datalist id="brand-list"><option>Renault</option><option>Fiat</option><option>Toyota</option><option>Volkswagen</option><option>Ford</option><option>Hyundai</option><option>Peugeot</option><option>Opel</option><option>Dacia</option><option>Honda</option><option>BMW</option><option>Mercedes-Benz</option><option>Audi</option><option>Citroën</option><option>Skoda</option><option>Kia</option><option>Nissan</option><option>Togg</option><option>Seat</option><option>Volvo</option><option>Isuzu</option><option>Iveco</option><option>MAN</option><option>Otokar</option></datalist>
+      <datalist id="color-list"><option>Beyaz</option><option>Siyah</option><option>Gri/Gümüş</option><option>Kırmızı</option><option>Mavi</option><option>Lacivert</option><option>Yeşil</option><option>Sarı</option><option>Turuncu</option><option>Kahverengi</option><option>Bej</option><option>Bordo</option></datalist>
+      <datalist id="type-list"><option>Otomobil</option><option>Kamyonet</option><option>Kamyon</option><option>Otobüs</option><option>Minibüs</option><option>Motosiklet</option></datalist>
+      <label>Açıklama<input name="description"></label>
       <label>Yetki durumu *
         <select name="status" required>
           <option value="authorized">Yetkili</option>
           <option value="unauthorized">Yetkisiz</option>
+          <option value="unassigned">Bilgi bekliyor</option>
         </select>
       </label>
       <label>Yetki bitiş tarihi (isteğe bağlı)<input name="validUntil" type="date"></label>
@@ -281,6 +293,22 @@
         <span class="spacer"></span>
         <button class="btn" value="cancel" formnovalidate>Vazgeç</button>
         <button class="btn primary" type="submit" value="save">Kaydet</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Dondurulmuş kareden yüz kaydı -->
+  <dialog id="qe-dialog" class="sheet">
+    <form id="qe-form" class="stack" autocomplete="off">
+      <h2>Yüzü Kaydet</h2>
+      <div class="qe-photo"><canvas id="qe-canvas"></canvas></div>
+      <p id="qe-msg" class="tiny"></p>
+      <label>Ad Soyad<input id="qe-name" name="name" placeholder="örn. Serkan Bilge" maxlength="80" required autocapitalize="words"></label>
+      <div class="row end">
+        <button class="btn" type="button" id="qe-retake">Tekrar çek</button>
+        <span class="spacer"></span>
+        <button class="btn" type="button" id="qe-cancel">Vazgeç</button>
+        <button class="btn primary" type="submit" id="qe-save">Kaydet</button>
       </div>
     </form>
   </dialog>

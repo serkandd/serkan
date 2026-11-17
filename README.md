@@ -26,8 +26,13 @@ görüntü analiz uygulaması. Telefon kamerasından gelen canlı görüntüyü 
 
 1. Linki Samsung telefonda açın, APK iner.
 2. İndirilen dosyaya dokunun. "Bilinmeyen kaynaklardan yükleme" izni sorulursa *Ayarlar → Bu kaynaktan izin ver*.
-3. *Yükle* → *Aç*. İlk açılışta yönetici hesabını oluşturun ve kamera iznine bir kez *İzin ver* deyin.
-4. Sonraki açılışlarda giriş yaptıktan sonra kamera doğrudan açılır ve analiz başlar.
+3. *Yükle* → *Aç*. İlk açılışta 4 haneli PIN belirleyin ve kamera iznine bir kez *İzin ver* deyin.
+4. Sonraki açılışlarda yalnızca PIN girilir; kamera doğrudan açılır ve analiz başlar.
+
+**Yüz kaydı:** Kamerada yüz görülünce *Yüzümü kaydet* düğmesine basın; görüntü dondurulur, ad soyad yazıp kaydedin.
+**Araçlar:** Okunan her yeni plaka araç fotoğrafı, rengi ve türüyle *Araçlar* listesine otomatik eklenir ("Bilgi bekliyor").
+Kayda dokunup plakayı düzeltebilir, aracı kullananı, şirketi, marka ve modeli girebilirsiniz. Düzeltilen eski okuma da aynı araçla eşleşir.
+Marka/model otomatik tanıma için `scripts/train_vehicle_make_model.py` ile model eğitilmelidir (hazır model dahil değildir).
 
 APK, depoya her yeni sürüm gönderildiğinde GitHub Actions tarafından otomatik derlenir (`.github/workflows/android.yml`).
 

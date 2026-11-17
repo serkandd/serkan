@@ -13,6 +13,7 @@ import { Analyzer } from './pipeline/analyzer.js';
 import { Overlay } from './ui/overlay.js';
 import { Alerts } from './ui/alerts.js';
 import { formatPlate } from './ocr/turkish-plate.js';
+import { VehicleMakeClassifier } from './detection/vehicle-make.js';
 
 const VEHICLE_MODEL = new URL('../models/vehicle/yolov8n-416.onnx', import.meta.url).href;
 const PLATE_MANIFEST = new URL('../models/plate/manifest.json', import.meta.url).href;
@@ -109,18 +110,53 @@ async function showAuth() {
   const setup = !(await auth.isSetupDone());
   $('#setup-form').hidden = !setup;
   $('#login-form').hidden = setup;
-  (setup ? $('#setup-form [name=password]') : $('#login-form [name=username]')).focus();
+  (setup ? $('#setup-form [name=password]') : $('#login-form [name=password]')).focus();
 }
+
+// 4 hane girilince otomatik devam
+for (const sel of ['#login-form [name=password]', '#setup-form [name=password2]']) {
+  $(sel).addEventListener('input', (e) => {
+    const el = e.target;
+    if (el.inputMode === 'numeric') el.value = el.value.replace(/\D/g, '').slice(0, auth.PIN_LENGTH);
+    if (el.inputMode === 'numeric' && el.value.length === auth.PIN_LENGTH) el.form.requestSubmit();
+  });
+}
+$('#setup-form [name=password]').addEventListener('input', (e) => {
+  e.target.value = e.target.value.replace(/\D/g, '').slice(0, auth.PIN_LENGTH);
+  if (e.target.value.length === auth.PIN_LENGTH) $('#setup-form [name=password2]').focus();
+});
+
+// Eski (harfli parola) kurulumlar için
+$('[data-action=legacy-password]').addEventListener('click', () => {
+  const el = $('#login-form [name=password]');
+  el.inputMode = 'text';
+  el.removeAttribute('maxlength');
+  el.placeholder = 'Eski parolanız';
+  $('#login-form [data-legacy-note]').hidden = false;
+  el.focus();
+});
+
+$('[data-action=factory-reset]').addEventListener('click', async () => {
+  if (!(await confirmBox('PIN\'inizi unuttuysanız uygulama sıfırlanır: tüm kayıtlar (personel, araçlar, olaylar) KALICI olarak silinir ve yeni PIN ile kurulum yapılır. Devam edilsin mi?', 'Tümünü sil ve sıfırla'))) return;
+  await auth.factoryReset();
+  toast('Uygulama sıfırlandı. Yeni PIN belirleyin.', 'ok');
+  showAuth();
+});
 
 $('#setup-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const f = formData(e.target);
   const err = $('[data-error]', e.target);
   err.textContent = '';
-  if (f.password !== f.password2) { err.textContent = 'Parolalar eşleşmiyor.'; return; }
+  if (f.password !== f.password2) {
+    err.textContent = 'PIN\'ler eşleşmiyor. Tekrar girin.';
+    e.target.password2.value = '';
+    e.target.password2.focus();
+    return;
+  }
   try {
-    await auth.setupAdmin(f.username.trim(), f.password);
-    await repo.audit('system.setup', 'admin', { username: f.username.trim() });
+    await auth.setupAdmin(f.password);
+    await repo.audit('system.setup', 'admin', {});
     e.target.reset();
     await afterLogin();
   } catch (ex) {
@@ -133,15 +169,17 @@ $('#login-form').addEventListener('submit', async (e) => {
   const f = formData(e.target);
   const err = $('[data-error]', e.target);
   err.textContent = '';
-  const btn = $('button', e.target);
+  const btn = $('button[type=submit]', e.target);
   btn.disabled = true;
   try {
-    await auth.login(f.username.trim(), f.password);
+    await auth.login(f.password);
     await repo.audit('auth.login', auth.currentUser().id, {});
     e.target.reset();
     await afterLogin();
   } catch (ex) {
     err.textContent = ex.message;
+    e.target.password.value = '';
+    e.target.password.focus();
   } finally {
     btn.disabled = false;
   }
@@ -209,17 +247,14 @@ setInterval(() => {
 async function ensureAdminFresh() {
   const limit = (state.settings.autoLockMinutes || 5) * 60_000;
   if (Date.now() - state.adminUnlockedAt < limit && auth.idleMs() < limit) return true;
-  const pw = await passwordBox('Yönetim ekranı için parolanızı tekrar girin.');
+  const pw = await passwordBox('Yönetim ekranı için PIN\'inizi tekrar girin.');
   if (!pw) return false;
-  try {
-    const u = auth.currentUser();
-    await auth.login(u.username, pw);
+  if (await auth.verifyOwnPin(pw)) {
     state.adminUnlockedAt = Date.now();
     return true;
-  } catch (e) {
-    toast(e.message, 'error');
-    return false;
   }
+  toast('PIN hatalı.', 'error');
+  return false;
 }
 
 /* ========================================================= MODELLER */
@@ -294,6 +329,15 @@ async function loadModels() {
     step('Plaka tespit modeli (isteğe bağlı)', 'fail');
   }
 
+  state.makeClassifier = new VehicleMakeClassifier();
+  try {
+    state.models.vehicleMake = (await withTimeout(state.makeClassifier.load(), 60_000, 'Marka/model modeli'))
+      ? 'hazır' : 'yok — marka ve model elle girilir';
+  } catch (e) {
+    console.error(e);
+    state.models.vehicleMake = `yüklenemedi: ${e.message}`;
+  }
+
   state.plateWorker = new Worker(new URL('./workers/plate-worker.js', import.meta.url), { type: 'module' });
 
   state.camera = new CameraManager($('#video'));
@@ -307,6 +351,7 @@ async function loadModels() {
     registry: { personnel: repo.personnel, findVehicleByPlate: repo.findVehicleByPlate },
   });
   state.overlay = new Overlay($('#overlay'), $('#video'), state.analyzer);
+  state.analyzer.makeClassifier = state.makeClassifier;
   window.__analyzer = state.analyzer; // tanılama / uçtan uca testler için
   window.__app = state;
   wireAnalyzer();
@@ -445,65 +490,121 @@ document.addEventListener('visibilitychange', () => {
 const RESULT_COLOR = {
   authorized: 'ok', 'verified-authorized': 'ok',
   'registered-unauthorized': 'danger', 'verified-unauthorized': 'danger',
-  'not-registered': 'info', unregistered: 'info',
+  'not-registered': 'info', unregistered: 'info', unassigned: 'info',
   unreadable: 'muted',
 };
 
 /* ============================================== CANLI GÖRÜNTÜDEN HIZLI KAYIT */
 
-/** Kayıt için hedef yüz: kadrajdaki en büyük, şu an görülen yüz */
-function enrollTarget() {
+/** Kadrajda şu an görülen bir yüz var mı (düğmenin görünmesi için) */
+function faceInView() {
   const a = state.analyzer;
-  if (!a) return null;
-  return a.faceTracker.tracks
-    .filter((t) => t.confirmed && performance.now() - t.lastSeen < 2500)
-    .sort((x, y) => y.box.w - x.box.w)[0] || null;
+  return !!a?.faceTracker.tracks.some((t) => t.confirmed && performance.now() - t.lastSeen < 2500);
 }
 
 function updateQuickEnroll() {
-  const form = $('#quick-enroll');
-  const typing = document.activeElement === $('#qe-name') || $('#qe-name').value.trim();
-  const busy = form.dataset.busy === '1';
+  const box = $('#quick-enroll');
   const running = state.camera?.isRunning && state.analyzer?.faceEnabled;
-  if (!running || !auth.can('personnel')) { form.hidden = true; return; }
-  const t = enrollTarget();
-  if (!t && !typing && !busy) { form.hidden = true; return; }
-  form.hidden = false;
-  if (busy || typing) return;
-  const known = t?.data.decided && t.data.person;
-  form.classList.toggle('known', !!known);
-  $('#qe-msg').textContent = known
-    ? `Tanındı: ${t.data.person.fullName}. Başka biri için ad yazıp kaydedebilirsiniz.`
-    : 'Kameraya önden bakın. Adınızı yazıp Kaydet\'e basın; sonra sizi bu isimle tanır.';
+  box.hidden = !(running && auth.can('personnel') && (faceInView() || $('#qe-dialog').open));
 }
 
-$('#quick-enroll').addEventListener('submit', async (e) => {
+const qe = { frames: [], descriptors: [], photo: null };
+
+/** Kareyi dondurur: birkaç kare çeker, en büyük yüzü bulur ve önizlemeyi gösterir */
+async function captureFace() {
+  const video = $('#video');
+  const msg = $('#qe-msg');
+  const W = video.videoWidth, H = video.videoHeight;
+  if (!W || !H) return;
+  qe.frames = []; qe.descriptors = []; qe.photo = null;
+  // İlk kare hemen (ekranda bu donar), sonra kısa aralıklarla iki kare daha
+  for (let i = 0; i < 3; i++) {
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    c.getContext('2d').drawImage(video, 0, 0, W, H);
+    qe.frames.push(c);
+    if (i === 0) drawPreview(c, null);
+    if (i < 2) await new Promise((r) => setTimeout(r, 220));
+  }
+  $('#qe-save').disabled = true;
+  msg.className = 'tiny muted';
+  msg.textContent = 'Yüz inceleniyor…';
+  let shown = false, lastReason = '';
+  for (const c of qe.frames) {
+    const r = await state.face.describeStill(c, { minSize: 60 });
+    if (r.descriptor) {
+      qe.descriptors.push(r.descriptor);
+      if (!shown) {
+        drawPreview(c, r.box);
+        qe.photo = faceThumbDataUrl(c, r.box);
+        shown = true;
+      }
+    } else {
+      lastReason = r.reason;
+      if (!shown && r.box) drawPreview(c, r.box, true);
+    }
+  }
+  if (qe.descriptors.length) {
+    msg.className = 'tiny';
+    msg.textContent = `Yüz hazır (${qe.descriptors.length} kare). Adınızı yazıp Kaydet'e basın.`;
+    $('#qe-save').disabled = false;
+    $('#qe-name').focus();
+  } else {
+    msg.className = 'tiny error';
+    msg.textContent = `${lastReason || 'Yüz bulunamadı'}. "Tekrar çek" ile yeniden deneyin.`;
+  }
+}
+
+function drawPreview(src, box, bad = false) {
+  const c = $('#qe-canvas');
+  // Yüz bulunduysa yüze yakınlaş, yoksa tüm kareyi göster
+  let r = { x: 0, y: 0, w: src.width, h: src.height };
+  if (box) {
+    const m = 1.2;
+    const cx = box.x + box.w / 2, cy = box.y + box.h / 2, size = Math.max(box.w, box.h) * (1 + 2 * m);
+    r = { x: Math.max(0, cx - size / 2), y: Math.max(0, cy - size / 2), w: Math.min(src.width, size), h: Math.min(src.height, size) };
+  }
+  const scale = Math.min(1, 640 / Math.max(r.w, r.h));
+  c.width = Math.round(r.w * scale); c.height = Math.round(r.h * scale);
+  const ctx = c.getContext('2d');
+  ctx.drawImage(src, r.x, r.y, r.w, r.h, 0, 0, c.width, c.height);
+  if (box) {
+    ctx.strokeStyle = bad ? '#f59e0b' : '#22c55e';
+    ctx.lineWidth = 3;
+    ctx.strokeRect((box.x - r.x) * scale, (box.y - r.y) * scale, box.w * scale, box.h * scale);
+  }
+}
+
+function faceThumbDataUrl(src, box) {
+  const m = 0.35;
+  const x = Math.max(0, box.x - box.w * m), y = Math.max(0, box.y - box.h * m);
+  const w = Math.min(src.width - x, box.w * (1 + 2 * m)), h = Math.min(src.height - y, box.h * (1 + 2 * m));
+  const c = document.createElement('canvas');
+  const scale = Math.min(1, 160 / Math.max(w, h));
+  c.width = Math.round(w * scale); c.height = Math.round(h * scale);
+  c.getContext('2d').drawImage(src, x, y, w, h, 0, 0, c.width, c.height);
+  return c.toDataURL('image/jpeg', 0.82);
+}
+
+$('#qe-capture').addEventListener('click', async () => {
+  if (!state.face?.recognitionReady) { toast('Yüz tanıma modeli yüklenemedi.', 'error'); return; }
+  $('#qe-name').value = '';
+  $('#qe-msg').textContent = '';
+  $('#qe-dialog').showModal();
+  await captureFace();
+});
+$('#qe-retake').addEventListener('click', () => captureFace());
+$('#qe-cancel').addEventListener('click', () => $('#qe-dialog').close());
+
+$('#qe-form').addEventListener('submit', async (e) => {
   e.preventDefault();
-  const form = e.target;
   const name = $('#qe-name').value.trim().replace(/\s+/g, ' ');
   const msg = $('#qe-msg');
-  if (name.length < 2) { msg.textContent = 'Lütfen bir ad yazın.'; return; }
-  if (!state.face?.recognitionReady) { msg.textContent = 'Yüz tanıma modeli yüklenemedi.'; return; }
-  form.dataset.busy = '1';
+  if (name.length < 2) { msg.className = 'tiny error'; msg.textContent = 'Lütfen ad soyad yazın.'; return; }
+  if (!qe.descriptors.length) return;
   $('#qe-save').disabled = true;
   try {
-    // Kısa sürede birkaç kare topla: farklı ifadeler/açılar tanımayı güçlendirir
-    const descriptors = [];
-    let lastReason = 'Yüz görünmüyor';
-    const t0 = performance.now();
-    while (descriptors.length < 3 && performance.now() - t0 < 6000) {
-      const t = enrollTarget();
-      if (!t) { lastReason = 'Yüz görünmüyor'; await new Promise((r) => setTimeout(r, 300)); continue; }
-      msg.textContent = `Yüz kaydediliyor… (${descriptors.length}/3) Kameraya bakmaya devam edin.`;
-      const r = await state.face.describe($('#video'), t.predict(performance.now()), { minSize: 60, minScore: 0.6 });
-      if (r.descriptor) descriptors.push(Array.from(r.descriptor));
-      else lastReason = r.quality.reason || 'Görüntü yeterince net değil';
-      await new Promise((res) => setTimeout(res, 350));
-    }
-    if (!descriptors.length) throw new Error(`Kaydedilemedi: ${lastReason}. Kameraya daha yakın ve önden bakın.`);
-
     const existing = repo.personnel().find((p) => p.fullName.toLocaleLowerCase('tr') === name.toLocaleLowerCase('tr'));
-    const me = auth.currentUser().username;
     await repo.savePersonnel({
       ...(existing || {}),
       id: existing?.id,
@@ -511,20 +612,19 @@ $('#quick-enroll').addEventListener('submit', async (e) => {
       fullName: name,
       department: existing?.department || '',
       status: existing?.status || 'authorized',
-      consent: { informed: true, legalBasis: 'Canlı kamera ile yerinde kayıt (kişinin kendi onayıyla)', recordedAt: Date.now(), by: me },
-      descriptors: [...(existing?.descriptors || []), ...descriptors].slice(-10),
+      consent: { informed: true, legalBasis: 'Canlı kamera ile yerinde kayıt (kişinin kendi onayıyla)', recordedAt: Date.now(), by: auth.currentUser().username },
+      descriptors: [...(existing?.descriptors || []), ...qe.descriptors].slice(-12),
+      photo: qe.photo || existing?.photo || null,
     });
     // Ekrandaki yüzler yeni kayda göre hemen yeniden doğrulansın
     for (const tr of state.analyzer.faceTracker.tracks) tr.data = {};
-    $('#qe-name').value = '';
-    $('#qe-name').blur();
-    msg.textContent = `${name} kaydedildi (${descriptors.length} yüz örneği). Birkaç saniye içinde tanınacaksınız.`;
-    toast(`${name} kaydedildi`, 'ok');
+    $('#qe-dialog').close();
+    toast(`${name} kaydedildi. Artık kamerada bu isimle tanınacak.`, 'ok', 5000);
     renderPersonnel();
   } catch (ex) {
+    msg.className = 'tiny error';
     msg.textContent = ex.message;
   } finally {
-    form.dataset.busy = '';
     $('#qe-save').disabled = false;
   }
 });
@@ -563,12 +663,44 @@ function wireAnalyzer() {
   }, 500);
 }
 
+async function blobToDataUrl(blob) {
+  if (!blob) return null;
+  return new Promise((resolve) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = () => resolve(null);
+    r.readAsDataURL(blob);
+  });
+}
+
+/** Okunan plakayı araç listesine işler: yeni ise otomatik ekler, kayıtlıysa görülme bilgisini günceller. */
+async function registerPlateSighting(d) {
+  if (d.kind !== 'plate' || !d.plate) return;
+  try {
+    const info = {
+      plate: d.plate, color: d.color || '', vehicleType: d.vehicleType || '',
+      brand: d.detectedMake?.brand || '', model: d.detectedMake?.model || '',
+      photo: d.vehiclePhoto || null, plateImage: await blobToDataUrl(d.thumb),
+    };
+    const v = repo.findVehicleByPlate(d.plate);
+    if (v) await repo.recordVehicleSighting(v.id, info);
+    else {
+      await repo.autoAddVehicle(info);
+      toast(`Yeni araç listeye eklendi: ${d.plateFormatted}${d.color ? ` · ${d.color}` : ''}${d.vehicleType ? ` ${d.vehicleType}` : ''}`, 'info', 5000);
+    }
+    if (state.tab === 'vehicles') renderVehicles();
+  } catch (e) {
+    console.error('Araç kaydı güncellenemedi', e);
+  }
+}
+
 async function onDetection(d) {
   const color = RESULT_COLOR[d.result] || 'info';
+  registerPlateSighting(d);
   let saved;
   try {
     const thumb = d.thumb;
-    const { thumb: _omit, ...ev } = d;
+    const { thumb: _omit, vehiclePhoto: _p, detectedMake: _m, ...ev } = d;
     saved = await repo.addEvent(ev, thumb);
   } catch (e) {
     console.error('Olay kaydedilemedi', e);
@@ -585,7 +717,8 @@ async function onDetection(d) {
   let speech = '';
   if (d.kind === 'plate') {
     if (d.plateFormatted) {
-      showBanner(d.plateFormatted, d.label + (d.owner ? ` · ${d.owner}` : '') + (d.company ? ` · ${d.company}` : ''), color);
+      const desc = [d.color, d.brand, d.model, d.vehicleType].filter(Boolean).join(' ');
+      showBanner(d.plateFormatted, [d.label, d.owner, d.company, desc].filter(Boolean).join(' · '), color);
       speech = `Plaka ${d.plateFormatted.split(' ').join(', ')}. ${d.label}`;
     }
   } else if (d.fullName) {
@@ -620,7 +753,8 @@ function eventItem(ev, withReview = true) {
   let title, meta;
   if (ev.kind === 'plate') {
     title = `<div class="title plate">${esc(ev.plateFormatted || 'Okunamadı')}</div>`;
-    meta = [ev.label, ev.owner, ev.company, ev.confidence ? `güven %${ev.confidence}` : ''].filter(Boolean).join(' · ');
+    const desc = [ev.color, ev.brand, ev.model, ev.vehicleType].filter(Boolean).join(' ');
+    meta = [ev.label, ev.owner, ev.company, desc, ev.confidence ? `güven %${ev.confidence}` : ''].filter(Boolean).join(' · ');
   } else {
     title = `<div class="title">${esc(ev.fullName ? `${ev.fullName} (${ev.employeeNo})` : `Yüz ${ev.trackId || ''}`)}</div>`;
     meta = [ev.label, ev.confidence ? `güven %${ev.confidence}` : ''].filter(Boolean).join(' · ');
@@ -630,7 +764,7 @@ function eventItem(ev, withReview = true) {
     <div class="meta">${esc(fmtTime(ev.ts))}</div>`;
   if (ev.hasThumb) {
     repo.eventThumbUrl(ev.id).then((url) => {
-      if (url) $('.ico', li).innerHTML = `<img src="${url}" alt="Plaka görüntüsü">`;
+      if (url) $('.ico', li).innerHTML = ev.kind === 'face' ? `<img class="face" src="${url}" alt="Yüz">` : `<img src="${url}" alt="Plaka görüntüsü">`;
     }).catch(() => {});
   }
   if (withReview && !String(ev.id).startsWith('tmp-')) {
@@ -753,7 +887,7 @@ function renderPersonnel() {
     const li = document.createElement('li');
     li.className = 'rec';
     const exp = p.retentionUntil ? ` · saklama: ${new Date(p.retentionUntil).toLocaleDateString('tr-TR')}` : '';
-    li.innerHTML = `<div><div class="title">${esc(p.fullName)}</div>
+    li.innerHTML = `<div class="pthumb">${p.photo ? `<img src="${p.photo}" alt="">` : 'YÜZ'}</div><div class="vbody"><div class="title">${esc(p.fullName)}</div>
       <div class="meta">No: ${esc(p.employeeNo)}${p.department ? ` · ${esc(p.department)}` : ''} · ${p.descriptors?.length || 0} şablon${esc(exp)}</div></div>
       <span class="tag ${p.status === 'authorized' ? 'ok' : 'danger'}">${p.status === 'authorized' ? 'Yetkili' : 'Yetkisiz'}</span>`;
     li.addEventListener('click', () => openPersonnel(p));
@@ -855,21 +989,33 @@ $('[data-action=personnel-new]').addEventListener('click', () => openPersonnel(n
 
 /* --------------------------------------------------------------- ARAÇLAR */
 
+const VEHICLE_TAG = { authorized: 'ok', unauthorized: 'danger', unassigned: 'muted' };
+
 function renderVehicles() {
   if (!auth.can('vehicles')) return;
   const q = ($('#vehicle-search').value || '').toLocaleUpperCase('tr').replace(/\s/g, '');
   const list = repo.vehicles()
-    .filter((v) => !q || `${v.plateKey}${v.owner}${v.company}${v.description}`.toLocaleUpperCase('tr').replace(/\s/g, '').includes(q))
-    .sort((a, b) => a.plateKey.localeCompare(b.plateKey));
+    .filter((v) => !q || [v.plateKey, v.owner, v.company, v.description, v.brand, v.model, v.color, ...(v.aliases || [])]
+      .join('').toLocaleUpperCase('tr').replace(/\s/g, '').includes(q))
+    // Bilgi bekleyenler üstte, sonra son görülene göre
+    .sort((a, b) => (a.status === 'unassigned' ? 0 : 1) - (b.status === 'unassigned' ? 0 : 1) || (b.lastSeen || 0) - (a.lastSeen || 0) || a.plateKey.localeCompare(b.plateKey));
+  const pending = list.filter((v) => v.status === 'unassigned').length;
+  $('#vehicle-pending').textContent = pending ? `${pending} araç bilgi bekliyor: plakaya dokunup sahip ve şirket bilgisini ekleyin.` : '';
   const ul = $('#vehicle-list');
-  ul.innerHTML = list.length ? '' : '<li class="muted">Kayıtlı araç yok.</li>';
+  ul.innerHTML = list.length ? '' : '<li class="muted">Kayıtlı araç yok. Kamera bir plaka okuduğunda araç buraya otomatik eklenir.</li>';
   for (const v of list) {
     const expired = v.validUntil && new Date(v.validUntil) < new Date();
     const li = document.createElement('li');
-    li.className = 'rec';
-    li.innerHTML = `<div><div class="title mono">${esc(v.plate)}</div>
-      <div class="meta">${esc([v.owner, v.company, v.description].filter(Boolean).join(' · ') || '—')}${v.validUntil ? ` · bitiş: ${esc(new Date(v.validUntil).toLocaleDateString('tr-TR'))}` : ''}</div></div>
-      <span class="tag ${v.status === 'authorized' && !expired ? 'ok' : 'danger'}">${expired ? 'Süresi doldu' : v.status === 'authorized' ? 'Yetkili' : 'Yetkisiz'}</span>`;
+    li.className = 'rec vehicle-rec';
+    const desc = [v.color, v.brand, v.model, v.vehicleType].filter(Boolean).join(' ');
+    const who = [v.owner, v.company].filter(Boolean).join(' · ');
+    const tag = expired ? ['danger', 'Süresi doldu'] : [VEHICLE_TAG[v.status] || 'muted', repo.VEHICLE_STATUS[v.status] || v.status];
+    li.innerHTML = `<div class="vthumb">${v.photo ? `<img src="${v.photo}" alt="">` : '<span>ARAÇ</span>'}</div>
+      <div class="vbody"><div class="title mono">${esc(v.plate)}</div>
+      <div class="meta">${esc(desc || 'Marka/model girilmedi')}</div>
+      <div class="meta">${esc(who || 'Sahip / şirket bilgisi yok')}</div>
+      ${v.lastSeen ? `<div class="meta">Son görülme: ${esc(fmtTime(v.lastSeen))} · ${v.seenCount || 1} kez</div>` : ''}</div>
+      <span class="tag ${tag[0]}">${esc(tag[1])}</span>`;
     li.addEventListener('click', () => openVehicle(v));
     ul.appendChild(li);
   }
@@ -881,12 +1027,24 @@ function openVehicle(v = null) {
   f.reset();
   fillForm(f, {
     id: v?.id || '', plate: v?.plate || '', owner: v?.owner || '', company: v?.company || '',
-    description: v?.description || '', status: v?.status || 'authorized', validUntil: v?.validUntil || '',
+    brand: v?.brand || '', model: v?.model || '', color: v?.color || '', vehicleType: v?.vehicleType || '',
+    description: v?.description || '',
+    // Otomatik eklenen araç düzenlenirken varsayılan "Yetkili"; bilgi girilmeden kaydedilirse bekleme durumu korunur
+    status: v?.status || 'authorized', validUntil: v?.validUntil || '',
   });
-  f.dataset.createdAt = v?.createdAt || '';
-  $('[data-title]', f).textContent = v ? 'Araç Kaydını Düzenle' : 'Yeni Araç Kaydı';
+  $('[data-title]', f).textContent = v ? (v.autoCreated && v.status === 'unassigned' ? 'Otomatik Eklenen Araç' : 'Araç Kaydını Düzenle') : 'Yeni Araç Kaydı';
   $('[data-action=vehicle-delete]', f).hidden = !v;
   $('[data-error]', f).textContent = '';
+  const photos = [];
+  if (v?.photo) photos.push(`<figure><img src="${v.photo}" alt="Araç"><figcaption>Araç</figcaption></figure>`);
+  if (v?.plateImage) photos.push(`<figure><img src="${v.plateImage}" alt="Plaka"><figcaption>Okunan plaka</figcaption></figure>`);
+  $('#vehicle-photos').innerHTML = photos.join('');
+  $('#vehicle-photos').hidden = !photos.length;
+  const info = [];
+  if (v?.firstSeen) info.push(`İlk görülme: ${fmtTime(v.firstSeen)}`);
+  if (v?.lastSeen) info.push(`Son görülme: ${fmtTime(v.lastSeen)} (${v.seenCount || 1} kez)`);
+  if (v?.aliases?.length) info.push(`Eski okumalar da bu araçla eşleşir: ${v.aliases.map(formatPlate).join(', ')}`);
+  $('#vehicle-seen').textContent = info.join(' · ');
   $('#vehicle-dialog').showModal();
 }
 
@@ -897,7 +1055,7 @@ $('#vehicle-form').addEventListener('submit', async (e) => {
   if (e.submitter?.value === 'cancel') { $('#vehicle-dialog').close(); return; }
   const f = formData(e.target);
   try {
-    await repo.saveVehicle({ ...f, id: f.id || undefined, createdAt: Number(e.target.dataset.createdAt) || undefined, validUntil: f.validUntil || null });
+    await repo.saveVehicle({ ...f, id: f.id || undefined, validUntil: f.validUntil || null });
     $('#vehicle-dialog').close();
     renderVehicles();
     toast('Araç kaydı kaydedildi.', 'ok');
@@ -936,6 +1094,7 @@ const SETTINGS_SCHEMA = [
   { key: 'plateMinOcrConf', label: 'En düşük OCR güveni', type: 'number', min: 0.3, max: 0.95, step: 0.05 },
   { key: 'dedupSeconds', label: 'Aynı plaka/kişi için tekrar bildirim süresi (sn)', type: 'number', min: 5, max: 3600 },
   { key: 'storePlateThumbnails', label: 'Olay kaydında plaka görüntüsünü sakla', type: 'checkbox' },
+  { key: 'storeFaceThumbnails', label: 'Son algılamalarda yüz küçük resmini göster ve sakla', type: 'checkbox' },
   { group: 'Uyarılar' },
   { key: 'sound', label: 'Sesli uyarı (varsayılan)', type: 'checkbox' },
   { key: 'speak', label: 'Sonucu sesli oku (Türkçe)', type: 'checkbox' },
@@ -1007,7 +1166,7 @@ async function renderUsers() {
         if (act === 'toggle') { await auth.setUserDisabled(u.id, !u.disabled); await repo.audit('user.toggle', u.id, { disabled: !u.disabled }); }
         if (act === 'del' && (await confirmBox(`${u.username} silinsin mi?`, 'Sil'))) { await auth.deleteUser(u.id); await repo.audit('user.delete', u.id, { username: u.username }); }
         if (act === 'reset') {
-          const pw = await passwordBox(`${u.username} için yeni parola`);
+          const pw = await passwordBox(`${u.username} için yeni 4 haneli PIN`);
           if (pw) { await auth.resetUserPassword(u.id, pw); await repo.audit('user.password_reset', u.id, {}); toast('Parola güncellendi.', 'ok'); }
         }
         renderUsers();
@@ -1022,7 +1181,7 @@ $('#user-form').addEventListener('submit', async (e) => {
   if (!(await ensureAdminFresh())) return;
   const f = formData(e.target);
   try {
-    const u = await auth.addUser(f.username.trim(), f.password, f.role);
+    const u = await auth.addUser(f.username, f.password, f.role);
     await repo.audit('user.create', u.id, { username: u.username, role: u.role });
     e.target.reset();
     renderUsers();
@@ -1037,18 +1196,18 @@ $('#password-form').addEventListener('submit', async (e) => {
     await auth.changeOwnPassword(f.old, f.new);
     await repo.audit('user.password_change', auth.currentUser().id, {});
     e.target.reset();
-    toast('Parolanız değiştirildi.', 'ok');
+    toast('PIN\'iniz değiştirildi.', 'ok');
   } catch (ex) { toast(ex.message, 'error'); }
 });
 
 const AUDIT_LABELS = {
   'system.setup': 'Kurulum', 'auth.login': 'Giriş', 'auth.logout': 'Çıkış', 'camera.start': 'Kamera başlatıldı', 'camera.stop': 'Kamera durduruldu',
   'personnel.create': 'Personel eklendi', 'personnel.update': 'Personel güncellendi', 'personnel.delete': 'Personel silindi',
-  'vehicle.create': 'Araç eklendi', 'vehicle.update': 'Araç güncellendi', 'vehicle.delete': 'Araç silindi',
+  'vehicle.create': 'Araç eklendi', 'vehicle.auto_create': 'Araç otomatik eklendi', 'vehicle.update': 'Araç güncellendi', 'vehicle.delete': 'Araç silindi',
   'event.review': 'Olay incelendi', 'settings.update': 'Ayarlar değişti', 'retention.purge': 'Saklama süresi dolan veriler silindi',
   'events.purge_all': 'Tüm olaylar silindi', 'backup.export': 'Yedek alındı', 'user.create': 'Kullanıcı eklendi',
-  'user.delete': 'Kullanıcı silindi', 'user.toggle': 'Kullanıcı durumu', 'user.password_reset': 'Parola sıfırlandı',
-  'user.password_change': 'Parola değişti', 'events.export_csv': 'Olaylar CSV dışa aktarıldı',
+  'user.delete': 'Kullanıcı silindi', 'user.toggle': 'Kullanıcı durumu', 'user.password_reset': 'PIN sıfırlandı',
+  'user.password_change': 'PIN değişti', 'events.export_csv': 'Olaylar CSV dışa aktarıldı',
 };
 
 async function renderAudit() {
@@ -1108,6 +1267,7 @@ async function renderDiag() {
     ['Plaka OCR', state.models.ocr],
     ['Araç algılama', state.models.vehicle],
     ['Plaka modeli', state.models.plateModel],
+    ['Marka/model modeli', state.models.vehicleMake || '—'],
     ['Çapraz köken izolasyonu', self.crossOriginIsolated ? 'etkin (çok iş parçacığı)' : 'yok (tek iş parçacığı)'],
     ['İşlemci çekirdeği', navigator.hardwareConcurrency || '?'],
     ['Kamera', info ? `${info.width}×${info.height} · ${info.label}` : 'kapalı'],

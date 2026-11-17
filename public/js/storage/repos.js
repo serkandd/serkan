@@ -11,6 +11,7 @@ export const DEFAULT_SETTINGS = {
   eventRetentionDays: 30,
   auditRetentionDays: 365,
   storePlateThumbnails: true,
+  storeFaceThumbnails: true,   // olay listesinde yüz küçük resmi
   dedupSeconds: 60,
   faceMatchThreshold: 0.45,     // Öklid mesafesi; düşük = daha katı
   faceMatchMargin: 0.06,        // en iyi ve ikinci en iyi aday arası en az fark
@@ -135,6 +136,7 @@ export async function savePersonnel(p) {
     consent: p.consent || null,
     retentionUntil: p.retentionUntil || null,
     descriptors: (p.descriptors || []).map((d) => Array.from(d, (v) => Math.round(v * 1e5) / 1e5)),
+    photo: p.photo || null, // küçük yüz fotoğrafı (listede gösterilir)
     createdAt: p.createdAt || Date.now(),
     createdBy: p.createdBy || currentUser().username,
   };
@@ -158,8 +160,28 @@ export async function deletePersonnel(id) {
 
 /* ---------------------------------------------------------------- ARAÇ */
 
+/**
+ * Araç kaydı alanları:
+ *   plate, plateKey, aliases[]      — plaka ve elle düzeltilmeden önceki yanlış okumalar (bunlar da eşleşir)
+ *   brand, model, color, vehicleType — marka, model, renk, tür
+ *   owner, company, description      — aracı kullanan kişi, şirket, açıklama
+ *   status: authorized | unauthorized | unassigned (otomatik eklendi, bilgi bekliyor)
+ *   photo, plateImage                — araç ve plaka görüntüsü (JPEG data URI, şifreli kayıt içinde)
+ *   firstSeen, lastSeen, seenCount, autoCreated
+ */
+export const VEHICLE_STATUS = {
+  authorized: 'Yetkili',
+  unauthorized: 'Yetkisiz',
+  unassigned: 'Bilgi bekliyor',
+};
+
 let vehicleCache = null;
 let vehicleIndex = new Map();
+
+function indexVehicle(v) {
+  vehicleIndex.set(v.plateKey, v);
+  for (const a of v.aliases || []) if (!vehicleIndex.has(a)) vehicleIndex.set(a, v);
+}
 
 export async function loadVehicles() {
   const dek = currentDek();
@@ -170,11 +192,13 @@ export async function loadVehicles() {
     try {
       const v = { id: r.id, updatedAt: r.updatedAt, ...(await decryptJson(dek, r.enc)) };
       vehicleCache.push(v);
-      vehicleIndex.set(v.plateKey, v);
     } catch (e) {
       console.error('Araç kaydı çözülemedi', r.id, e);
     }
   }
+  // Önce asıl plakalar, sonra eski okumalar (asıl plaka her zaman önceliklidir)
+  for (const v of vehicleCache) vehicleIndex.set(v.plateKey, v);
+  for (const v of vehicleCache) indexVehicle(v);
   return vehicleCache;
 }
 
@@ -186,26 +210,100 @@ export function findVehicleByPlate(plate) {
   return vehicleIndex.get(plateKey(plate)) || null;
 }
 
+async function writeVehicle(id, rec) {
+  await db.put('vehicles', { id, enc: await encryptJson(currentDek(), rec), updatedAt: Date.now() });
+}
+
+function vehicleRecord(v, prev = {}) {
+  return {
+    ...prev,
+    plate: formatPlate(v.plateKey), plateKey: v.plateKey,
+    aliases: v.aliases ?? prev.aliases ?? [],
+    brand: (v.brand ?? prev.brand ?? '').trim(),
+    model: (v.model ?? prev.model ?? '').trim(),
+    color: (v.color ?? prev.color ?? '').trim(),
+    vehicleType: (v.vehicleType ?? prev.vehicleType ?? '').trim(),
+    owner: (v.owner ?? prev.owner ?? '').trim(),
+    company: (v.company ?? prev.company ?? '').trim(),
+    description: (v.description ?? prev.description ?? '').trim(),
+    status: v.status ?? prev.status ?? 'unassigned',
+    validUntil: v.validUntil ?? prev.validUntil ?? null,
+    photo: v.photo ?? prev.photo ?? null,
+    plateImage: v.plateImage ?? prev.plateImage ?? null,
+    firstSeen: prev.firstSeen ?? v.firstSeen ?? null,
+    lastSeen: v.lastSeen ?? prev.lastSeen ?? null,
+    seenCount: v.seenCount ?? prev.seenCount ?? 0,
+    autoCreated: prev.autoCreated ?? v.autoCreated ?? false,
+    createdAt: prev.createdAt ?? Date.now(),
+    createdBy: prev.createdBy ?? currentUser()?.username ?? 'sistem',
+  };
+}
+
+/** Yönetici kaydı ekler / günceller. Plaka düzeltilirse eski plaka "eski okuma" olarak saklanır. */
 export async function saveVehicle(v) {
   requirePermission('vehicles');
   const key = plateKey(v.plate);
   if (!isValidTurkishPlate(key)) throw new Error('Plaka Türk plaka formatına uymuyor (örn. 34 ABC 123).');
-  if (!['authorized', 'unauthorized'].includes(v.status)) throw new Error('Yetki durumu seçilmelidir.');
-  const dup = findVehicleByPlate(key);
-  if (dup && dup.id !== v.id) throw new Error('Bu plaka zaten kayıtlı.');
-  const isNew = !v.id;
-  const rec = {
-    plate: formatPlate(key), plateKey: key,
-    owner: (v.owner || '').trim(), company: (v.company || '').trim(),
-    description: (v.description || '').trim(), status: v.status,
-    validUntil: v.validUntil || null,
-    createdAt: v.createdAt || Date.now(), createdBy: v.createdBy || currentUser().username,
-  };
+  if (!VEHICLE_STATUS[v.status]) throw new Error('Yetki durumu seçilmelidir.');
+  const prev = v.id ? vehicles().find((x) => x.id === v.id) : null;
+  const dup = vehicles().find((x) => x.id !== v.id && x.plateKey === key);
+  if (dup) throw new Error(`Bu plaka zaten kayıtlı (${dup.plate}${dup.owner ? `, ${dup.owner}` : ''}).`);
+  const aliases = new Set(prev?.aliases || []);
+  if (prev && prev.plateKey !== key) aliases.add(prev.plateKey);
+  aliases.delete(key);
+  const { id: _id, updatedAt: _u, ...prevRec } = prev || {};
+  const rec = vehicleRecord({ ...v, plateKey: key, aliases: [...aliases] }, prevRec);
   const id = v.id || crypto.randomUUID();
-  await db.put('vehicles', { id, enc: await encryptJson(currentDek(), rec), updatedAt: Date.now() });
-  await audit(isNew ? 'vehicle.create' : 'vehicle.update', id, { plate: rec.plate, status: rec.status });
+  await writeVehicle(id, rec);
+  await audit(prev ? 'vehicle.update' : 'vehicle.create', id, {
+    plate: rec.plate, status: rec.status, ...(prev && prev.plateKey !== key ? { correctedFrom: prev.plate } : {}),
+  });
   await loadVehicles();
   return id;
+}
+
+/**
+ * Kayıtlı olmayan bir plaka okunduğunda sistem tarafından otomatik kayıt (her rol için çalışır).
+ * Kayıt "Bilgi bekliyor" durumunda açılır; yetki kararı yöneticiye kalır.
+ */
+export async function autoAddVehicle(info) {
+  const key = plateKey(info.plate);
+  if (!isValidTurkishPlate(key)) return null;
+  const existing = findVehicleByPlate(key);
+  if (existing) return recordVehicleSighting(existing.id, info);
+  const now = Date.now();
+  const rec = vehicleRecord({
+    plateKey: key, status: 'unassigned', vehicleType: info.vehicleType || '', color: info.color || '',
+    brand: info.brand || '', model: info.model || '',
+    photo: info.photo || null, plateImage: info.plateImage || null,
+    firstSeen: now, lastSeen: now, seenCount: 1, autoCreated: true,
+  });
+  rec.createdBy = 'sistem';
+  const id = crypto.randomUUID();
+  await writeVehicle(id, rec);
+  await audit('vehicle.auto_create', id, { plate: rec.plate, color: rec.color, type: rec.vehicleType });
+  await loadVehicles();
+  return vehicles().find((x) => x.id === id);
+}
+
+/** Kayıtlı aracın görülme bilgisini günceller; eksik görsel/renk/tür bilgisini tamamlar. */
+export async function recordVehicleSighting(id, info = {}) {
+  const v = vehicles().find((x) => x.id === id);
+  if (!v) return null;
+  const { id: _id, updatedAt: _u, ...rec } = v;
+  const now = Date.now();
+  rec.firstSeen = rec.firstSeen || now;
+  rec.lastSeen = now;
+  rec.seenCount = (rec.seenCount || 0) + 1;
+  if (!rec.photo && info.photo) rec.photo = info.photo;
+  if (!rec.plateImage && info.plateImage) rec.plateImage = info.plateImage;
+  if (!rec.color && info.color) rec.color = info.color;
+  if (!rec.vehicleType && info.vehicleType) rec.vehicleType = info.vehicleType;
+  if (!rec.brand && info.brand) rec.brand = info.brand;
+  if (!rec.model && info.model) rec.model = info.model;
+  await writeVehicle(id, rec);
+  await loadVehicles();
+  return vehicles().find((x) => x.id === id);
 }
 
 export async function deleteVehicle(id) {
@@ -226,7 +324,7 @@ export async function addEvent(ev, thumb) {
   const dek = currentDek();
   const ts = Date.now();
   const row = { id: crypto.randomUUID(), ts, kind: ev.kind, enc: await encryptJson(dek, ev) };
-  if (thumb && ev.kind === 'plate') {
+  if (thumb) {
     const bytes = new Uint8Array(await thumb.arrayBuffer());
     row.thumb = await encryptBytes(dek, bytes);
   }

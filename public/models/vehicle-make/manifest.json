@@ -1,0 +1,7 @@
+{
+  "_aciklama": "İsteğe bağlı araç marka/model sınıflandırıcısı. scripts/train_vehicle_make_model.py ile üretilir. Model yoksa marka ve model elle girilir.",
+  "model": null,
+  "inputSize": 224,
+  "minConfidence": 0.6,
+  "labels": []
+}

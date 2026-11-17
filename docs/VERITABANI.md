@@ -27,8 +27,8 @@ Tarayıcının **IndexedDB** veritabanı (`guvenlik-asistani`, şema sürümü 1
   "createdAt": 0, "createdBy": "yonetici"
 }
 ```
-Fotoğraf **saklanmaz**. Yalnızca yüz şablonu (128 boyutlu sayı dizisi) tutulur; şablondan fotoğraf geri
-üretilemez.
+Yüz şablonu (128 boyutlu sayı dizisi) ve canlı kayıtta çekilen küçük yüz resmi (`photo`, ~160 px) şifreli tutulur.
+Personel formundan yüklenen tam boy fotoğraflar saklanmaz.
 
 **Araç**
 ```json
@@ -44,7 +44,9 @@ Fotoğraf **saklanmaz**. Yalnızca yüz şablonu (128 boyutlu sayı dizisi) tutu
   "personId": "", "employeeNo": "", "fullName": "",
   "review": { "decision": "confirmed | rejected", "by": "", "at": 0, "note": "" } }
 ```
-Plaka olaylarında isteğe bağlı küçük plaka görüntüsü (`thumb`, şifreli JPEG). **Yüz görüntüsü kaydedilmez.**
+Olaylarda isteğe bağlı küçük görüntü (`thumb`, şifreli JPEG): plaka kırpıntısı veya ~128 px yüz resmi.
+Her ikisi de Ayarlar'dan kapatılabilir. Araç kayıtları araç fotoğrafını (`photo`, ~480 px), plaka görüntüsünü,
+renk/tür/marka/modeli, görülme sayısını ve elle düzeltilmiş plakaların eski okumalarını (`aliases`) içerir.
 
 **İşlem kaydı (audit)**: `{ action, target, details, user, role }` — `hash = SHA256(prev + ts + iv + ct)`.
 Kayıtlardan biri silinir veya değiştirilirse *Ayarlar → İşlem Kayıtları → Zinciri doğrula* tutarsızlığı bildirir.
@@ -52,7 +54,7 @@ Kayıtlardan biri silinir veya değiştirilirse *Ayarlar → İşlem Kayıtları
 ## 2. Şifreleme
 
 ```
-Parola ──PBKDF2-SHA256 (310.000 tur, 16 bayt rastgele tuz)──► KEK (AES-KW 256)
+PIN (4 hane) ──PBKDF2-SHA256 (310.000 tur, 16 bayt rastgele tuz)──► KEK (AES-KW 256)
                                                              │ wrap / unwrap
 Rastgele DEK (AES-GCM 256) ◄─────────────────────────────────┘
    │
@@ -63,6 +65,9 @@ Rastgele DEK (AES-GCM 256) ◄────────────────�
 - Giriş = DEK'in çözülebilmesi. DEK yalnızca oturum açıkken bellekte tutulur; görevli oturumlarında
   dışa aktarılamaz (`extractable: false`).
 - Hatalı girişlerde 3. denemeden sonra artan bekleme (15 sn'den 15 dk'ya kadar).
+- **Uyarı:** 4 haneli PIN yalnızca 10.000 olasılıktır. Uygulama içinde bekleme süreleri tahmini engeller, ancak
+  telefonun dosyalarına doğrudan erişen biri şifreli veritabanını bilgisayarda kısa sürede çözebilir. Telefonun
+  ekran kilidi ve cihaz şifrelemesi açık tutulmalıdır.
 - **Parola kurtarma yoktur**: tüm yönetici parolaları unutulursa veriler çözülemez. En az iki yönetici hesabı
   ve düzenli şifreli yedek önerilir.
 

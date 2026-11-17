@@ -163,6 +163,28 @@ export class FaceEngine {
   }
 
   /**
+   * Dondurulmuş kare (fotoğraf) üzerinde en büyük yüzü bulur, kalitesini ölçer ve şablon çıkarır.
+   * @returns {Promise<{descriptor:number[]|null, box:{x,y,w,h}|null, reason:string, faces:number}>}
+   */
+  async describeStill(canvas, { minSize = 60 } = {}) {
+    if (!this.recognitionReady) return { descriptor: null, box: null, reason: 'Yüz tanıma modeli yüklenemedi', faces: 0 };
+    const f = this.faceapi;
+    const dets = await f.detectAllFaces(canvas, new f.SsdMobilenetv1Options({ minConfidence: 0.5 }))
+      .withFaceLandmarks()
+      .withFaceDescriptors();
+    if (!dets.length) return { descriptor: null, box: null, reason: 'Fotoğrafta yüz bulunamadı', faces: 0 };
+    const d = dets.sort((a, b) => b.detection.box.width - a.detection.box.width)[0];
+    const b = d.detection.box;
+    const box = { x: b.x, y: b.y, w: b.width, h: b.height };
+    const frontal = frontalScore(d.landmarks.positions);
+    let reason = '';
+    if (box.w < minSize) reason = 'Yüz çok küçük, kameraya yaklaşın';
+    else if (d.detection.score < 0.6) reason = 'Yüz net değil';
+    else if (frontal < 0.3) reason = 'Kameraya önden bakın';
+    return { descriptor: reason ? null : Array.from(d.descriptor), box, reason, faces: dets.length, score: d.detection.score };
+  }
+
+  /**
    * Kayıt fotoğrafından şablon çıkarır. Fotoğrafta tam olarak bir net yüz olmalıdır.
    * Fotoğrafın kendisi saklanmaz; yalnızca şablon (sayı dizisi) döner.
    */

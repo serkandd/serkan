@@ -16,7 +16,6 @@ export const ROLES = {
   operator: { label: 'Güvenlik Görevlisi', can: ['live', 'events'] },
 };
 
-export const MIN_PASSWORD = 8;
 
 const session = {
   user: null,
@@ -57,19 +56,18 @@ export async function isSetupDone() {
   return !!(await getMeta('setup'));
 }
 
-function validatePassword(pw) {
-  if (typeof pw !== 'string' || pw.length < MIN_PASSWORD) {
-    throw new Error(`Parola en az ${MIN_PASSWORD} karakter olmalıdır.`);
-  }
-  if (!/[0-9]/.test(pw) || !/[A-Za-zÇĞİÖŞÜçğıöşü]/.test(pw)) {
-    throw new Error('Parola en az bir harf ve bir rakam içermelidir.');
+/** Giriş yalnızca 4 haneli PIN ile yapılır. */
+export const PIN_LENGTH = 4;
+
+function validatePin(pin) {
+  if (!new RegExp(`^\\d{${PIN_LENGTH}}$`).test(pin || '')) {
+    throw new Error(`PIN ${PIN_LENGTH} rakamdan oluşmalıdır.`);
   }
 }
 
 function validateUsername(u) {
-  if (!/^[a-zA-Z0-9._-]{3,32}$/.test(u || '')) {
-    throw new Error('Kullanıcı adı 3-32 karakter olmalı; harf, rakam, nokta, tire içerebilir.');
-  }
+  const v = (u || '').trim();
+  if (v.length < 2 || v.length > 32) throw new Error('Kullanıcı adı 2-32 karakter olmalıdır.');
 }
 
 async function findUser(username) {
@@ -77,20 +75,33 @@ async function findUser(username) {
   return all.find((u) => u.username.toLowerCase() === username.toLowerCase()) || null;
 }
 
+/** Verilen PIN'i çözebilen kullanıcıyı bulur (yöneticiler önce denenir). */
+async function userForPin(pin, { includeDisabled = false } = {}) {
+  const users = (await db.getAll('users'))
+    .filter((u) => includeDisabled || !u.disabled)
+    .sort((a, b) => (a.role === 'admin' ? -1 : 1) - (b.role === 'admin' ? -1 : 1));
+  for (const u of users) {
+    try {
+      const dek = await unwrapDek(u.wrap, pin, u.role === 'admin');
+      return { user: u, dek };
+    } catch { /* bu kullanıcının PIN'i değil */ }
+  }
+  return null;
+}
+
 /** İlk kurulum: yönetici hesabı ve veri anahtarı oluşturur. */
-export async function setupAdmin(username, password) {
+export async function setupAdmin(pin) {
   if (await isSetupDone()) throw new Error('Kurulum zaten yapılmış.');
-  validateUsername(username);
-  validatePassword(password);
+  validatePin(pin);
   const dek = await generateDek();
-  const wrap = await wrapDek(dek, password);
+  const wrap = await wrapDek(dek, pin);
   const user = {
-    id: crypto.randomUUID(), username, role: 'admin', wrap,
+    id: crypto.randomUUID(), username: 'Yönetici', role: 'admin', wrap,
     createdAt: Date.now(), disabled: false,
   };
   await db.put('users', user);
-  await setMeta('setup', { createdAt: Date.now(), version: 1 });
-  const usable = await unwrapDek(wrap, password, true);
+  await setMeta('setup', { createdAt: Date.now(), version: 2, auth: 'pin' });
+  const usable = await unwrapDek(wrap, pin, true);
   session.user = publicUser(user);
   session.dek = usable;
   touch();
@@ -101,33 +112,38 @@ function publicUser(u) {
   return { id: u.id, username: u.username, role: u.role, createdAt: u.createdAt, disabled: u.disabled };
 }
 
-export async function login(username, password) {
-  const failKey = `loginFail:${(username || '').toLowerCase()}`;
+/** PIN ile giriş. Ardışık hatalı denemelerde artan bekleme uygulanır. */
+export async function login(pin) {
+  const failKey = 'loginFail:pin';
   const fail = (await getMeta(failKey)) || { count: 0, until: 0 };
   if (Date.now() < fail.until) {
     const s = Math.ceil((fail.until - Date.now()) / 1000);
     throw new Error(`Çok sayıda hatalı deneme. ${s} saniye sonra tekrar deneyin.`);
   }
-  const user = await findUser(username || '');
-  let dek = null;
-  if (user && !user.disabled) {
-    try {
-      dek = await unwrapDek(user.wrap, password, user.role === 'admin');
-    } catch {
-      dek = null;
-    }
-  }
-  if (!dek) {
+  const found = pin ? await userForPin(String(pin)) : null;
+  if (!found) {
     const count = fail.count + 1;
     const delay = count >= 3 ? Math.min(15 * 60_000, 2 ** (count - 3) * 15_000) : 0;
     await setMeta(failKey, { count, until: Date.now() + delay });
-    throw new Error(user?.disabled ? 'Hesap devre dışı.' : 'Kullanıcı adı veya parola hatalı.');
+    throw new Error(count >= 3 ? `PIN hatalı. ${Math.round(delay / 1000)} saniye bekleyin.` : 'PIN hatalı.');
   }
   await setMeta(failKey, { count: 0, until: 0 });
-  session.user = publicUser(user);
-  session.dek = dek;
+  session.user = publicUser(found.user);
+  session.dek = found.dek;
   touch();
   return session.user;
+}
+
+/** Oturumdaki kullanıcının PIN'ini doğrular (yönetim ekranları için yeniden onay). */
+export async function verifyOwnPin(pin) {
+  const u = await db.get('users', session.user.id);
+  try {
+    session.dek = await unwrapDek(u.wrap, pin, u.role === 'admin');
+    touch();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function logout() {
@@ -135,19 +151,26 @@ export function logout() {
   session.dek = null;
 }
 
+/** Tüm verileri siler (PIN unutulduğunda yeniden kurulum için). */
+export async function factoryReset() {
+  for (const store of ['users', 'personnel', 'vehicles', 'events', 'audit', 'meta']) await db.clear(store);
+  logout();
+}
+
 export async function listUsers() {
   requirePermission('users');
   return (await db.getAll('users')).map(publicUser);
 }
 
-export async function addUser(username, password, role) {
+export async function addUser(username, pin, role) {
   requirePermission('users');
   validateUsername(username);
-  validatePassword(password);
+  validatePin(pin);
   if (!ROLES[role]) throw new Error('Geçersiz rol');
-  if (await findUser(username)) throw new Error('Bu kullanıcı adı zaten var.');
-  const wrap = await wrapDek(session.dek, password);
-  const user = { id: crypto.randomUUID(), username, role, wrap, createdAt: Date.now(), disabled: false };
+  if (await findUser(username.trim())) throw new Error('Bu kullanıcı adı zaten var.');
+  if (await userForPin(pin, { includeDisabled: true })) throw new Error('Bu PIN başka bir kullanıcıda kullanılıyor. Farklı bir PIN seçin.');
+  const wrap = await wrapDek(session.dek, pin);
+  const user = { id: crypto.randomUUID(), username: username.trim(), role, wrap, createdAt: Date.now(), disabled: false };
   await db.put('users', user);
   return publicUser(user);
 }
@@ -178,10 +201,12 @@ export async function deleteUser(id) {
 }
 
 export async function changeOwnPassword(oldPw, newPw) {
-  validatePassword(newPw);
+  validatePin(newPw);
+  const other = await userForPin(newPw, { includeDisabled: true });
+  if (other && other.user.id !== session.user.id) throw new Error('Bu PIN başka bir kullanıcıda kullanılıyor.');
   const u = await db.get('users', session.user.id);
   const dek = await unwrapDek(u.wrap, oldPw, true).catch(() => null);
-  if (!dek) throw new Error('Mevcut parola hatalı.');
+  if (!dek) throw new Error('Mevcut PIN hatalı.');
   u.wrap = await wrapDek(dek, newPw);
   await db.put('users', u);
 }
@@ -189,9 +214,11 @@ export async function changeOwnPassword(oldPw, newPw) {
 /** Yönetici başka bir kullanıcının parolasını sıfırlar (DEK yönetici oturumundan yeniden sarılır). */
 export async function resetUserPassword(id, newPw) {
   requirePermission('users');
-  validatePassword(newPw);
+  validatePin(newPw);
   const u = await db.get('users', id);
   if (!u) throw new Error('Kullanıcı bulunamadı');
+  const other = await userForPin(newPw, { includeDisabled: true });
+  if (other && other.user.id !== id) throw new Error('Bu PIN başka bir kullanıcıda kullanılıyor.');
   u.wrap = await wrapDek(session.dek, newPw);
   await db.put('users', u);
 }

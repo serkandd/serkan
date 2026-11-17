@@ -1,5 +1,5 @@
 {
- "version": 1794930170363,
+ "version": 1794931555911,
  "files": [
   "css/app.css",
   "icons/icon-192.png",
@@ -11,6 +11,8 @@
   "js/detection/face-engine.js",
   "js/detection/face-match.js",
   "js/detection/plate-localizer.js",
+  "js/detection/vehicle-color.js",
+  "js/detection/vehicle-make.js",
   "js/detection/yolo-detector.js",
   "js/main.js",
   "js/ocr/plate-ocr.js",
@@ -41,6 +43,7 @@
   "models/face/tiny_face_detector_model-weights_manifest.json",
   "models/face/tiny_face_detector_model.bin",
   "models/plate/manifest.json",
+  "models/vehicle-make/manifest.json",
   "models/vehicle/yolov8n-416.onnx",
   "vendor/face-api/face-api.esm.js",
   "vendor/ort/ort-wasm-simd-threaded.mjs",

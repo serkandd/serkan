@@ -87,10 +87,10 @@ try {
   const coi = await page.evaluate(() => self.crossOriginIsolated);
   check('Service worker ile cross-origin isolation', coi);
 
-  await page.fill('#setup-form [name=password]', 'TestParola2026');
-  await page.fill('#setup-form [name=password2]', 'TestParola2026');
   const tLoad = Date.now();
-  await page.click('#setup-form button[type=submit]');
+  // 4 haneli PIN: ikinci alan dolunca form kendiliğinden gönderilir
+  await page.type('#setup-form [name=password]', '2468');
+  await page.type('#setup-form [name=password2]', '2468');
   await page.waitForSelector('#app:not([hidden])', { timeout: 180_000 });
   check('Kurulum + model yükleme', true, `${((Date.now() - tLoad) / 1000).toFixed(1)} sn`);
   await page.screenshot({ path: join(out, '01-live-idle.png') });
@@ -167,6 +167,8 @@ try {
   await page.screenshot({ path: join(out, '03-live-faces.png') });
   const recent = await page.$eval('#recent-list', (el) => el.innerText);
   check('Kayıtlı personel doğrulandı', /Kayıtlı Personel A/.test(recent), recent.split('\n').filter(Boolean).slice(0, 6).join(' | '));
+  const faceThumb = await page.$eval('#recent-list .ico img.face', () => true).catch(() => false);
+  check('Son algılamalarda yüz küçük resmi', faceThumb);
 
   const st = await page.evaluate(() => {
     const a = window.__analyzer;
@@ -193,21 +195,43 @@ try {
   check('Aynı plaka tekrar tekrar kaydedilmez', plateEvents === 1, `${plateEvents} kayıt`);
   check('Plaka olmayan desenler (jaluzi vb.) "okunamadı" olayı üretmez', !/Okunamadı/.test(recentAll));
 
-  // Canlı görüntüden hızlı kayıt: en büyük yüz "Serkan Bilge" olarak kaydedilir ve tanınır
+  // Canlı görüntüden hızlı kayıt: "Yüzümü kaydet" → kare dondurulur → ad yazılır → tanınır
   await page.waitForSelector('#quick-enroll:not([hidden])', { timeout: 20_000 }).catch(() => {});
   const qeVisible = await page.$eval('#quick-enroll', (el) => !el.hidden);
-  check('Yüz görülünce isim alanı çıkar', qeVisible);
+  check('Yüz görülünce "Yüzümü kaydet" düğmesi çıkar', qeVisible);
   if (qeVisible) {
+    await page.click('#qe-capture');
+    await page.waitForFunction(() => /hazır|bulunamadı|yaklaşın|net değil|önden/.test(document.querySelector('#qe-msg').textContent), null, { timeout: 120_000 }).catch(() => {});
+    const qeMsg = await page.$eval('#qe-msg', (el) => el.textContent);
+    check('Görüntü donduruldu ve yüz bulundu', /hazır/.test(qeMsg), qeMsg);
+    await page.screenshot({ path: join(out, '06-freeze.png') });
     await page.fill('#qe-name', 'Serkan Bilge');
     await page.click('#qe-save');
-    await page.waitForFunction(() => /kaydedildi|Kaydedilemedi/.test(document.querySelector('#qe-msg').textContent), null, { timeout: 120_000 }).catch(() => {});
-    const qeMsg = await page.$eval('#qe-msg', (el) => el.textContent);
-    check('Canlı görüntüden yüz kaydı', /kaydedildi/.test(qeMsg), qeMsg);
+    await page.waitForTimeout(800);
+    check('Kayıt penceresi kapandı', !(await page.$eval('#qe-dialog', (d) => d.open)));
     await page.waitForFunction(() => window.__analyzer.faceTracker.tracks.some((t) => t.data.person?.fullName === 'Serkan Bilge'), null, { timeout: 150_000 }).catch(() => {});
     const named = await page.evaluate(() => window.__analyzer.faceTracker.tracks.filter((t) => t.data.person).map((t) => t.data.person.fullName));
     check('Kaydedilen kişi kamerada adıyla tanınır', named.includes('Serkan Bilge'), JSON.stringify(named));
     await page.screenshot({ path: join(out, '06-quick-enroll.png') });
   }
+
+  // Okunan plaka araç listesine otomatik eklenir (fotoğraf ve renk ile); sonra elle tamamlanır
+  await page.click('[data-tab=vehicles]');
+  await page.waitForTimeout(600);
+  const vlist = await page.$eval('#vehicle-list', (el) => el.innerText);
+  check('Okunan plaka araç listesinde', /34 ABC 123/.test(vlist), vlist.split('\n').slice(0, 4).join(' | '));
+  const hasPhoto = await page.$eval('#vehicle-list .vthumb img', () => true).catch(() => false);
+  check('Araç kaydında araç fotoğrafı var', hasPhoto);
+  await page.click('#vehicle-list .rec');
+  await page.fill('#vehicle-form [name=owner]', 'Serkan Bilge');
+  await page.fill('#vehicle-form [name=company]', 'Sade Ekonomi');
+  await page.fill('#vehicle-form [name=brand]', 'Renault');
+  await page.click('#vehicle-form button[value=save]');
+  await page.waitForTimeout(500);
+  const vlist2 = await page.$eval('#vehicle-list', (el) => el.innerText);
+  check('Araç kaydına sahip ve şirket eklendi', /Serkan Bilge/.test(vlist2) && /Sade Ekonomi/.test(vlist2), vlist2.split('\n').slice(0, 5).join(' | '));
+  await page.screenshot({ path: join(out, '07-vehicles.png') });
+  await page.click('[data-tab=live]');
 
   const overflow = await page.evaluate(() => ({ sw: document.body.scrollWidth, w: window.innerWidth, ctl: [...document.querySelectorAll('.controls .ctl')].every((b) => b.getBoundingClientRect().right <= window.innerWidth) }));
   check('Telefon genişliğinde (412px) yatay taşma yok', overflow.sw <= overflow.w && overflow.ctl, JSON.stringify(overflow));

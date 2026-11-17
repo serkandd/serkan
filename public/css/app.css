@@ -222,3 +222,25 @@ dialog::backdrop { background: rgba(0,0,0,.6); }
 .qe-row input { flex: 1; min-width: 0; }
 .quick-enroll p { margin: 0; }
 .quick-enroll.known { border-color: var(--ok); }
+
+/* PIN girişi */
+.pin-input { font-size: 1.8rem; letter-spacing: .6em; text-align: center; font-variant-numeric: tabular-nums; }
+.auth-links { justify-content: space-between; }
+.linkbtn { background: none; border: 0; color: var(--primary); padding: 8px 0; cursor: pointer; font-size: .9rem; min-height: 40px; }
+
+/* Araç listesi ve kayıt formu */
+.vehicle-rec { align-items: flex-start; }
+.vthumb { width: 76px; height: 56px; flex: none; border-radius: 8px; overflow: hidden; background: var(--bg2); display: grid; place-items: center; color: var(--muted); font-size: .7rem; }
+.vthumb img { width: 100%; height: 100%; object-fit: cover; }
+.vbody { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.vehicle-photos { display: flex; gap: 8px; overflow-x: auto; }
+.vehicle-photos figure { margin: 0; flex: none; }
+.vehicle-photos img { height: 110px; width: auto; max-width: 260px; border-radius: 8px; display: block; background: #fff; }
+.vehicle-photos figcaption { font-size: .75rem; color: var(--muted); }
+
+.quick-enroll .btn.big { width: 100%; }
+.qe-photo { background: #000; border-radius: 12px; overflow: hidden; display: grid; place-items: center; }
+.qe-photo canvas { display: block; max-width: 100%; max-height: 46dvh; height: auto; }
+.pthumb { width: 48px; height: 48px; border-radius: 50%; overflow: hidden; flex: none; background: var(--bg2); display: grid; place-items: center; color: var(--muted); font-size: .65rem; }
+.pthumb img { width: 100%; height: 100%; object-fit: cover; }
+.event .ico img.face { object-fit: cover; background: var(--bg2); }

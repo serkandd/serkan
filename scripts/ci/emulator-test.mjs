@@ -67,7 +67,7 @@ const t0 = Date.now();
 await waitFor(`!!document.querySelector('#setup-form:not([hidden]), #login-form:not([hidden])')`, 60_000);
 if (await evaluate(`!!document.querySelector('#setup-form:not([hidden])')`)) {
   await evaluate(`(() => { const f = document.querySelector('#setup-form');
-    f.password.value = 'TestParola2026'; f.password2.value = 'TestParola2026';
+    f.password.value = '2468'; f.password2.value = '2468';
     f.requestSubmit(); return true; })()`);
 }
 const opened = await waitFor(`!document.querySelector('#app').hidden`, 300_000);

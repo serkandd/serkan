@@ -22,8 +22,9 @@
    sağlandı" onayı ve hukuki dayanak/rıza belge referansı girilmeden çıkarılamaz ve kaydedilemez.
 3. **Kayıtsız kişiler**: Tahmin yapılmaz, isim atanmaz; yalnızca geçici takip numarası gösterilir. Takip
    numaraları kalıcı değildir, kişiyle ilişkilendirilmez.
-4. **Veri minimizasyonu**: Kayıt fotoğrafları şablon çıkarıldıktan sonra bellekten atılır. Canlı görüntüden
-   yüz resmi kaydedilmez. Plaka küçük resmi ayardan kapatılabilir.
+4. **Veri minimizasyonu**: Yüklenen tam boy kayıt fotoğrafları şablon çıkarıldıktan sonra bellekten atılır.
+   Kullanıcı isteğiyle personel kaydında ve olay listesinde küçük yüz resmi (≤160 px) şifreli tutulur; olay
+   listesindeki yüz ve plaka küçük resimleri Ayarlar'dan kapatılabilir.
 5. **Şifreleme**: AES-GCM 256, parola türevli anahtar sarma (bkz. VERITABANI.md).
 6. **Erişim kontrolü**: Yönetici / görevli rolleri, hareketsizlikte kilit, hatalı girişte bekleme.
 7. **Saklama ve imha**: Olaylar, işlem kayıtları ve personel kayıtları için süre sınırı; süresi dolanlar

@@ -20,11 +20,13 @@ import { Consensus, Deduplicator } from '../tracking/consensus.js';
 import { matchFace, distanceToScore } from '../detection/face-match.js';
 import { formatPlate } from '../ocr/turkish-plate.js';
 import { PerfMonitor } from './perf-monitor.js';
+import { estimateVehicleColor } from '../detection/vehicle-color.js';
 
 export const PLATE_RESULT = {
   AUTHORIZED: { key: 'authorized', label: 'Kayıtlı ve yetkili araç', color: 'ok' },
   UNAUTHORIZED: { key: 'registered-unauthorized', label: 'Kayıtlı, yetkisi yok', color: 'danger' },
-  NOT_FOUND: { key: 'not-registered', label: 'Kayıt bulunamadı', color: 'info' },
+  NOT_FOUND: { key: 'not-registered', label: 'Yeni araç – listeye eklendi', color: 'info' },
+  UNASSIGNED: { key: 'unassigned', label: 'Kayıtlı – bilgi bekliyor', color: 'info' },
   UNREADABLE: { key: 'unreadable', label: 'Plaka okunamadı', color: 'muted' },
 };
 
@@ -222,9 +224,25 @@ export class Analyzer extends EventTarget {
     }
   }
 
-  _emitFace(track, person, confidence) {
+  /** Yüzün küçük resmi (olay listesinde gösterilir) */
+  _faceThumb(box) {
+    const v = this.video;
+    const W = v.videoWidth, H = v.videoHeight;
+    const m = 0.3;
+    const x = Math.max(0, box.x - box.w * m), y = Math.max(0, box.y - box.h * m);
+    const w = Math.min(W - x, box.w * (1 + 2 * m)), h = Math.min(H - y, box.h * (1 + 2 * m));
+    if (w < 8 || h < 8) return Promise.resolve(null);
+    const scale = Math.min(1, 128 / Math.max(w, h));
+    const c = document.createElement('canvas');
+    c.width = Math.round(w * scale); c.height = Math.round(h * scale);
+    c.getContext('2d').drawImage(v, x, y, w, h, 0, 0, c.width, c.height);
+    return new Promise((resolve) => c.toBlob(resolve, 'image/jpeg', 0.8));
+  }
+
+  async _emitFace(track, person, confidence) {
     const key = person ? `p:${person.id}` : `anon:${track.uid}`;
     if (!this.faceDedup.shouldEmit(key)) return;
+    const thumb = this.settings.storeFaceThumbnails ? await this._faceThumb(track.box).catch(() => null) : null;
     this.dispatchEvent(new CustomEvent('detection', {
       detail: {
         kind: 'face',
@@ -235,7 +253,7 @@ export class Analyzer extends EventTarget {
         personId: person?.id ?? null,
         employeeNo: person?.employeeNo ?? null,
         fullName: person?.fullName ?? null,
-        // Yüz görüntüsü kaydedilmez (veri minimizasyonu)
+        thumb,
       },
     }));
   }
@@ -415,6 +433,7 @@ export class Analyzer extends EventTarget {
         const vehicle = this.registry.findVehicleByPlate(res.value);
         d.vehicle = vehicle;
         if (!vehicle) d.result = PLATE_RESULT.NOT_FOUND;
+        else if (vehicle.status === 'unassigned') d.result = PLATE_RESULT.UNASSIGNED;
         else if (vehicle.status === 'authorized' && !(vehicle.validUntil && new Date(vehicle.validUntil) < new Date())) d.result = PLATE_RESULT.AUTHORIZED;
         else d.result = PLATE_RESULT.UNAUTHORIZED;
         if (changed) this._emitPlate(t, vehicle, res.confidence);
@@ -425,10 +444,61 @@ export class Analyzer extends EventTarget {
     }
   }
 
-  _emitPlate(track, vehicle, confidence) {
+  /** Plakanın üzerinde bulunduğu araç izi */
+  _vehicleFor(box) {
+    const cx = box.x + box.w / 2, cy = box.y + box.h / 2;
+    return this.vehicleTracker.tracks
+      .filter((v) => cx > v.box.x && cx < v.box.x + v.box.w && cy > v.box.y && cy < v.box.y + v.box.h)
+      .sort((a, b) => a.box.w * a.box.h - b.box.w * b.box.h)[0] || null;
+  }
+
+  /**
+   * Aracın genel görüntüsünü kırpar, rengini ve türünü çıkarır. Araç algılayıcı aracı bulamadıysa
+   * plakanın çevresindeki bölge (aracın ön/arka yüzü) kullanılır.
+   */
+  _vehicleSnapshot(plateBox) {
+    const v = this.video;
+    const W = v.videoWidth, H = v.videoHeight;
+    if (!W || !H) return null;
+    const vt = this._vehicleFor(plateBox);
+    let r = vt ? { ...vt.box } : {
+      x: plateBox.x - plateBox.w * 1.6, y: plateBox.y - plateBox.h * 4.5, w: plateBox.w * 4.2, h: plateBox.h * 6,
+    };
+    const x = Math.max(0, r.x), y = Math.max(0, r.y);
+    r = { x, y, w: Math.min(W, r.x + r.w) - x, h: Math.min(H, r.y + r.h) - y };
+    if (r.w < 16 || r.h < 16) return null;
+    const scale = Math.min(1, 480 / Math.max(r.w, r.h));
+    const c = document.createElement('canvas');
+    c.width = Math.round(r.w * scale); c.height = Math.round(r.h * scale);
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(v, r.x, r.y, r.w, r.h, 0, 0, c.width, c.height);
+    const img = ctx.getImageData(0, 0, c.width, c.height);
+    const plateRel = {
+      x: (plateBox.x - r.x) * scale, y: (plateBox.y - r.y) * scale, w: plateBox.w * scale, h: plateBox.h * scale,
+    };
+    const color = estimateVehicleColor(img, plateRel);
+    return {
+      canvas: c,
+      photo: c.toDataURL('image/jpeg', 0.75),
+      color: color.confidence >= 0.3 ? color.name : '',
+      vehicleType: vt?.payload?.label || '',
+    };
+  }
+
+  async _emitPlate(track, vehicle, confidence) {
     const d = track.data;
     const key = d.plate ? `plate:${d.plate}` : `unreadable:${track.uid}`;
     if (!this.plateDedup.shouldEmit(key)) return;
+    let snap = null;
+    let make = null;
+    if (d.plate) {
+      try {
+        snap = this._vehicleSnapshot(track.box);
+        if (snap && this.makeClassifier?.ready) make = await this.makeClassifier.classify(snap.canvas).catch(() => null);
+      } catch (e) {
+        console.error('Araç görüntüsü alınamadı', e);
+      }
+    }
     this.dispatchEvent(new CustomEvent('detection', {
       detail: {
         kind: 'plate',
@@ -442,7 +512,13 @@ export class Analyzer extends EventTarget {
         owner: vehicle?.owner ?? null,
         company: vehicle?.company ?? null,
         description: vehicle?.description ?? null,
+        brand: vehicle?.brand || make?.brand || null,
+        model: vehicle?.model || make?.model || null,
+        color: vehicle?.color || snap?.color || null,
+        vehicleType: vehicle?.vehicleType || snap?.vehicleType || null,
         thumb: this.settings.storePlateThumbnails ? d.thumb : null,
+        vehiclePhoto: snap?.photo || null,
+        detectedMake: make,
       },
     }));
   }

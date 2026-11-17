@@ -18,14 +18,29 @@ test('şifreleme gidiş-dönüş ve yanlış parola', async () => {
 });
 
 test('kurulum, roller, kayıtlar, olaylar, işlem kaydı zinciri', async () => {
-  await assert.rejects(auth.setupAdmin('yonetici', 'kisa'), /en az/);
-  await auth.setupAdmin('yonetici', 'GucluParola1');
+  await assert.rejects(auth.setupAdmin('12a4'), /4 rakam/);
+  await assert.rejects(auth.setupAdmin('12345'), /4 rakam/);
+  await auth.setupAdmin('2468');
   assert.ok(auth.can('personnel'));
 
   // Araç kaydı + format doğrulaması
   await assert.rejects(repo.saveVehicle({ plate: '99 XX 1', status: 'authorized' }), /format/);
   await repo.saveVehicle({ plate: '34abc123', owner: 'Ali Veli', company: 'ACME', status: 'authorized' });
   await repo.saveVehicle({ plate: '06 KY 4321', status: 'unauthorized' });
+
+  // Otomatik kayıt: okunan yeni plaka "bilgi bekliyor" olarak eklenir, sonra elle düzeltilir/tamamlanır
+  const auto = await repo.autoAddVehicle({ plate: '35BC812', color: 'Beyaz', vehicleType: 'Otomobil', photo: 'data:image/jpeg;base64,AA' });
+  assert.equal(auto.status, 'unassigned');
+  assert.equal(auto.color, 'Beyaz');
+  const again = await repo.autoAddVehicle({ plate: '35 BC 812' });
+  assert.equal(again.id, auto.id);
+  assert.equal(again.seenCount, 2);
+  await repo.saveVehicle({ id: auto.id, plate: '35 BC 813', owner: 'Serkan Bilge', company: 'Sade Ekonomi', brand: 'Renault', model: 'Clio', status: 'authorized' });
+  const fixed = repo.findVehicleByPlate('35BC813');
+  assert.equal(fixed.owner, 'Serkan Bilge');
+  assert.equal(fixed.brand, 'Renault');
+  assert.equal(fixed.photo, 'data:image/jpeg;base64,AA', 'fotoğraf korunur');
+  assert.equal(repo.findVehicleByPlate('35BC812').id, auto.id, 'eski yanlış okuma da aynı araca eşleşir');
   await assert.rejects(repo.saveVehicle({ plate: '34 ABC 123', status: 'authorized' }), /zaten/);
   assert.equal(repo.findVehicleByPlate('34 ABC 123').owner, 'Ali Veli');
   assert.equal(repo.findVehicleByPlate('34ABC124'), null);
@@ -41,10 +56,12 @@ test('kurulum, roller, kayıtlar, olaylar, işlem kaydı zinciri', async () => {
   assert.ok(!raw.includes('Ayşe') && !raw.includes('34ABC123') && !raw.includes('Ali Veli'));
 
   // Görevli kullanıcı: kayıt yönetemez
-  await auth.addUser('gorevli1', 'Gorevli2026', 'operator');
+  await assert.rejects(auth.addUser('Gece görevlisi', '2468', 'operator'), /başka bir kullanıcı/);
+  await auth.addUser('Gece görevlisi', '1357', 'operator');
   auth.logout();
-  await assert.rejects(auth.login('gorevli1', 'yanlis1234'), /hatalı/);
-  await auth.login('gorevli1', 'Gorevli2026');
+  await assert.rejects(auth.login('0000'), /hatalı/);
+  await auth.login('1357');
+  assert.equal(auth.currentUser().role, 'operator');
   assert.equal(auth.can('personnel'), false);
   await assert.rejects(repo.saveVehicle({ plate: '35 AB 123', status: 'authorized' }), /yetkiniz/);
   await repo.loadVehicles();
@@ -55,7 +72,7 @@ test('kurulum, roller, kayıtlar, olaylar, işlem kaydı zinciri', async () => {
   await repo.reviewEvent(ev.id, 'confirmed');
   const list = await repo.listEvents(10);
   assert.equal(list[0].review.decision, 'confirmed');
-  assert.equal(list[0].review.by, 'gorevli1');
+  assert.equal(list[0].review.by, 'Gece görevlisi');
 
   // İşlem kaydı zinciri ve kurcalama tespiti
   await repo.audit('test.a', 'x', {});
