@@ -43,8 +43,12 @@ function step(text, status = 'run') {
   $('#boot-msg').textContent = status === 'run' ? text : $('#boot-msg').textContent;
 }
 
+/** Android uygulaması (Capacitor) içinde mi çalışıyoruz? */
+const IS_NATIVE_APP = !!window.Capacitor?.isNativePlatform?.();
+
 async function registerSw() {
-  if (!('serviceWorker' in navigator)) return;
+  // Android uygulamasında dosyalar zaten cihazda: service worker gerekmez
+  if (IS_NATIVE_APP || !('serviceWorker' in navigator)) return;
   try {
     const reg = await navigator.serviceWorker.register('sw.js', { scope: './' });
     await navigator.serviceWorker.ready;
@@ -162,6 +166,8 @@ async function afterLogin() {
   renderAll();
   switchTab('live');
   state.adminUnlockedAt = Date.now();
+  // Android uygulamasında girişten sonra kamera doğrudan açılır
+  if (IS_NATIVE_APP && !state.camera?.isRunning) startCamera();
 }
 
 async function lock(reason = '') {

@@ -1,0 +1,12 @@
+{
+  "appId": "com.guvenlik.asistani",
+  "appName": "Güvenlik Asistanı",
+  "webDir": "public",
+  "android": {
+    "allowMixedContent": false,
+    "backgroundColor": "#0b1220"
+  },
+  "server": {
+    "androidScheme": "https"
+  }
+}
