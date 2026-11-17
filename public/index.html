@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b1220">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Gerçek zamanlı yüz ve plaka analizli güvenlik asistanı">
+  <title>Güvenlik Asistanı</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <!-- Açılış / model yükleme -->
+  <section id="boot" class="screen">
+    <div class="boot-card">
+      <img src="icons/icon.svg" alt="" width="72" height="72">
+      <h1>Güvenlik Asistanı</h1>
+      <p id="boot-msg">Başlatılıyor…</p>
+      <ul id="boot-steps" class="steps"></ul>
+    </div>
+  </section>
+
+  <!-- Kurulum ve giriş -->
+  <section id="auth" class="screen" hidden>
+    <form id="setup-form" class="card auth-card" hidden autocomplete="off">
+      <h1>İlk Kurulum</h1>
+      <p class="muted">Bu cihazdaki kayıtlar yönetici parolasından türetilen anahtarla şifrelenir. Parola unutulursa veriler kurtarılamaz.</p>
+      <label>Yönetici kullanıcı adı<input name="username" required minlength="3" autocapitalize="none" value="yonetici"></label>
+      <label>Parola<input name="password" type="password" required minlength="8" autocomplete="new-password"></label>
+      <label>Parola (tekrar)<input name="password2" type="password" required minlength="8" autocomplete="new-password"></label>
+      <button class="btn primary big" type="submit">Kurulumu Tamamla</button>
+      <p class="error" data-error></p>
+    </form>
+    <form id="login-form" class="card auth-card" hidden>
+      <h1>Giriş</h1>
+      <label>Kullanıcı adı<input name="username" required autocapitalize="none" autocomplete="username"></label>
+      <label>Parola<input name="password" type="password" required autocomplete="current-password"></label>
+      <button class="btn primary big" type="submit">Giriş Yap</button>
+      <p class="error" data-error></p>
+    </form>
+  </section>
+
+  <!-- Uygulama -->
+  <section id="app" class="screen" hidden>
+    <header class="topbar">
+      <div class="brand"><img src="icons/icon.svg" alt="" width="24" height="24"><span>Güvenlik Asistanı</span></div>
+      <div class="topbar-right">
+        <span id="net-status" class="pill" title="Bağlantı durumu">Çevrimiçi</span>
+        <button id="user-chip" class="pill btn-ghost" type="button" title="Oturumu kapat"></button>
+      </div>
+    </header>
+
+    <main>
+      <!-- CANLI -->
+      <div id="view-live" class="view" data-view="live">
+        <div class="stage" id="stage">
+          <video id="video" playsinline muted autoplay></video>
+          <canvas id="overlay"></canvas>
+          <div class="stage-empty" id="stage-empty">
+            <p>Kamera kapalı</p>
+            <button class="btn primary big" type="button" data-action="camera-toggle">Kamerayı Aç</button>
+          </div>
+          <div class="hud-top">
+            <div class="chip" id="chip-face"><span class="dot"></span><b>Yüz</b><span data-text>—</span></div>
+            <div class="chip" id="chip-plate"><span class="dot"></span><b>Plaka</b><span data-text>—</span></div>
+            <div class="chip small" id="chip-perf">— fps</div>
+          </div>
+          <div class="hud-warn" id="hud-warn" hidden></div>
+          <div class="plate-banner" id="plate-banner" hidden>
+            <div class="plate-text" data-plate></div>
+            <div class="plate-sub" data-sub></div>
+          </div>
+        </div>
+
+        <div class="counters">
+          <div><span id="cnt-faces">0</span><small>Yüz</small></div>
+          <div><span id="cnt-plates">0</span><small>Plaka</small></div>
+          <div><span id="cnt-vehicles">0</span><small>Araç</small></div>
+          <div><span id="conf-face">—</span><small>Yüz güveni</small></div>
+          <div><span id="conf-plate">—</span><small>OCR güveni</small></div>
+        </div>
+
+        <div class="controls">
+          <button class="ctl" type="button" data-action="flip" title="Ön/arka kamera"><svg viewBox="0 0 24 24"><path d="M4 7h3l2-2h6l2 2h3v12H4z" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M9 13a3 3 0 0 1 5.2-2M15 13a3 3 0 0 1-5.2 2" fill="none" stroke="currentColor" stroke-width="1.8"/></svg><span>Çevir</span></button>
+          <button class="ctl toggle on" type="button" data-action="face-toggle" title="Yüz algılama"><svg viewBox="0 0 24 24"><circle cx="12" cy="10" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M5 20c1.5-3.5 4-5 7-5s5.5 1.5 7 5" fill="none" stroke="currentColor" stroke-width="1.8"/></svg><span>Yüz</span></button>
+          <button class="ctl main" type="button" data-action="camera-toggle" id="btn-camera" title="Kamerayı aç/kapat"><svg viewBox="0 0 24 24"><path d="M3 7h4l2-2h6l2 2h4v12H3z" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="13" r="3.5" fill="none" stroke="currentColor" stroke-width="2"/></svg><span>Başlat</span></button>
+          <button class="ctl toggle on" type="button" data-action="plate-toggle" title="Plaka algılama"><svg viewBox="0 0 24 24"><rect x="2.5" y="7" width="19" height="10" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M6 12h3M11 12h2M15 12h3" stroke="currentColor" stroke-width="1.8"/></svg><span>Plaka</span></button>
+          <button class="ctl toggle on" type="button" data-action="sound-toggle" title="Sesli uyarı"><svg viewBox="0 0 24 24"><path d="M4 10h4l5-4v12l-5-4H4z" fill="none" stroke="currentColor" stroke-width="1.8"/><path data-wave d="M16 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11" fill="none" stroke="currentColor" stroke-width="1.8"/></svg><span>Ses</span></button>
+        </div>
+
+        <div class="camera-extras" id="camera-extras" hidden>
+          <label class="zoom" id="zoom-wrap" hidden>Yakınlaştırma <output id="zoom-val">1×</output>
+            <input type="range" id="zoom" min="1" max="1" step="0.1" value="1">
+          </label>
+          <div class="row">
+            <select id="camera-select" aria-label="Kamera / lens seçimi"></select>
+            <button class="btn" type="button" id="btn-torch" hidden>Fener</button>
+          </div>
+          <p class="muted tiny" id="camera-info"></p>
+        </div>
+
+        <section class="recent">
+          <h2>Son algılamalar</h2>
+          <ul id="recent-list" class="event-list"></ul>
+        </section>
+      </div>
+
+      <!-- OLAYLAR -->
+      <div id="view-events" class="view" data-view="events" hidden>
+        <div class="view-head">
+          <h2>Algılama Kayıtları</h2>
+          <select id="events-filter" aria-label="Filtre">
+            <option value="">Tümü</option>
+            <option value="plate">Plakalar</option>
+            <option value="face">Yüzler</option>
+            <option value="alarm">Yalnızca uyarılar</option>
+            <option value="unreviewed">Onay bekleyen</option>
+          </select>
+        </div>
+        <p class="muted tiny">Yapay zekâ sonuçları karar destek amaçlıdır. Kritik uyarılar görevli tarafından onaylanmalı veya reddedilmelidir.</p>
+        <details class="card" id="field-report">
+          <summary><b>Saha testi raporu</b> (doğruluk ölçümü)</summary>
+          <p class="muted tiny">Görevlinin "Doğru" / "Hatalı algılama" işaretlemelerinden hesaplanır. 5 m ve 10 m testlerinde her algılamayı işaretleyin, ardından raporu dışa aktarın.</p>
+          <dl class="diag" id="report-stats"></dl>
+          <div class="row wrap"><button class="btn" type="button" data-action="report-csv">CSV olarak dışa aktar</button></div>
+        </details>
+        <ul id="events-list" class="event-list"></ul>
+      </div>
+
+      <!-- PERSONEL -->
+      <div id="view-personnel" class="view" data-view="personnel" hidden>
+        <div class="view-head">
+          <h2>Kayıtlı Personel</h2>
+          <button class="btn primary" type="button" data-action="personnel-new">+ Yeni</button>
+        </div>
+        <input type="search" id="personnel-search" placeholder="Ad, numara veya birim ara" aria-label="Personel ara">
+        <ul id="personnel-list" class="rec-list"></ul>
+      </div>
+
+      <!-- ARAÇLAR -->
+      <div id="view-vehicles" class="view" data-view="vehicles" hidden>
+        <div class="view-head">
+          <h2>Kayıtlı Araçlar</h2>
+          <button class="btn primary" type="button" data-action="vehicle-new">+ Yeni</button>
+        </div>
+        <input type="search" id="vehicle-search" placeholder="Plaka, sahip veya şirket ara" aria-label="Araç ara">
+        <ul id="vehicle-list" class="rec-list"></ul>
+      </div>
+
+      <!-- AYARLAR -->
+      <div id="view-settings" class="view" data-view="settings" hidden>
+        <h2>Ayarlar</h2>
+        <form id="settings-form" class="card stack"></form>
+
+        <section class="card stack" data-admin>
+          <h3>Kullanıcılar</h3>
+          <ul id="users-list" class="rec-list compact"></ul>
+          <form id="user-form" class="grid2">
+            <input name="username" placeholder="Kullanıcı adı" required autocapitalize="none">
+            <input name="password" type="password" placeholder="Parola (en az 8)" required autocomplete="new-password">
+            <select name="role"><option value="operator">Güvenlik Görevlisi</option><option value="admin">Yönetici</option></select>
+            <button class="btn" type="submit">Kullanıcı Ekle</button>
+          </form>
+        </section>
+
+        <section class="card stack">
+          <h3>Parolamı Değiştir</h3>
+          <form id="password-form" class="grid2">
+            <input name="old" type="password" placeholder="Mevcut parola" required autocomplete="current-password">
+            <input name="new" type="password" placeholder="Yeni parola" required autocomplete="new-password">
+            <button class="btn" type="submit">Değiştir</button>
+          </form>
+        </section>
+
+        <section class="card stack" data-admin>
+          <h3>Veri Yönetimi</h3>
+          <div class="row wrap">
+            <button class="btn" type="button" data-action="backup-export">Şifreli yedek al</button>
+            <label class="btn">Yedekten geri yükle<input type="file" id="backup-file" accept="application/json" hidden></label>
+            <button class="btn" type="button" data-action="retention-run">Saklama politikasını uygula</button>
+            <button class="btn danger" type="button" data-action="events-purge">Tüm olayları sil</button>
+          </div>
+        </section>
+
+        <section class="card stack" data-admin>
+          <div class="view-head"><h3>İşlem Kayıtları</h3><button class="btn" type="button" data-action="audit-verify">Zinciri doğrula</button></div>
+          <ul id="audit-list" class="audit-list"></ul>
+        </section>
+
+        <section class="card stack">
+          <h3>Sistem Tanılama</h3>
+          <dl id="diag" class="diag"></dl>
+        </section>
+      </div>
+    </main>
+
+    <nav class="tabbar" id="tabbar">
+      <button type="button" data-tab="live" class="active"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.5" fill="currentColor"/><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.8"/></svg><span>Canlı</span></button>
+      <button type="button" data-tab="events"><svg viewBox="0 0 24 24"><path d="M5 5h14M5 12h14M5 19h9" stroke="currentColor" stroke-width="2"/></svg><span>Kayıtlar</span><b id="badge-events" class="badge" hidden></b></button>
+      <button type="button" data-tab="personnel" data-perm="personnel"><svg viewBox="0 0 24 24"><circle cx="9" cy="9" r="3.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M3 19c1-3 3.5-4.5 6-4.5s5 1.5 6 4.5M16 7h5M16 11h5" fill="none" stroke="currentColor" stroke-width="1.8"/></svg><span>Personel</span></button>
+      <button type="button" data-tab="vehicles" data-perm="vehicles"><svg viewBox="0 0 24 24"><path d="M4 16V11l2-5h12l2 5v5M3 16h18M7 19v-3M17 19v-3" fill="none" stroke="currentColor" stroke-width="1.8"/></svg><span>Araçlar</span></button>
+      <button type="button" data-tab="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1" stroke="currentColor" stroke-width="1.8"/></svg><span>Ayarlar</span></button>
+    </nav>
+  </section>
+
+  <!-- Personel formu -->
+  <dialog id="personnel-dialog" class="sheet">
+    <form method="dialog" id="personnel-form" class="stack">
+      <h2 data-title>Personel Kaydı</h2>
+      <input type="hidden" name="id">
+      <label>Personel numarası *<input name="employeeNo" required></label>
+      <label>Ad Soyad *<input name="fullName" required autocomplete="off"></label>
+      <label>Birim / Görev<input name="department"></label>
+      <label>Yetki durumu *
+        <select name="status" required>
+          <option value="authorized">Yetkili (giriş izni var)</option>
+          <option value="unauthorized">Yetkisiz (giriş izni yok)</option>
+        </select>
+      </label>
+      <fieldset class="stack">
+        <legend>Biyometrik doğrulama şablonu</legend>
+        <p class="muted tiny">Fotoğraf yalnızca yüz şablonu (128 sayı) çıkarmak için cihazda işlenir ve <b>saklanmaz</b>. Daha iyi doğruluk için farklı açılardan 2-3 net fotoğraf ekleyin.</p>
+        <label class="check"><input type="checkbox" name="informed"> İlgili kişi biyometrik verisinin işlenmesi hakkında aydınlatıldı ve gerekli hukuki şartlar (açık rıza veya kanuni dayanak) sağlandı.</label>
+        <label>Hukuki dayanak / açık rıza belgesi referansı
+          <input name="legalBasis" placeholder="ör. KVKK m.6 açık rıza, belge no: 2026/145">
+        </label>
+        <label>Veri saklama bitiş tarihi
+          <input name="retentionUntil" type="date">
+        </label>
+        <div class="row wrap">
+          <label class="btn">Fotoğraf yükle<input type="file" accept="image/*" name="photo" multiple hidden></label>
+          <label class="btn">Kameradan çek<input type="file" accept="image/*" capture="user" name="capture" hidden></label>
+          <button class="btn danger" type="button" data-action="templates-clear">Şablonları sil</button>
+        </div>
+        <p class="tiny" data-templates>Şablon yok</p>
+      </fieldset>
+      <p class="error" data-error></p>
+      <div class="row end">
+        <button class="btn danger" type="button" data-action="personnel-delete" hidden>Kaydı Sil</button>
+        <span class="spacer"></span>
+        <button class="btn" value="cancel" formnovalidate>Vazgeç</button>
+        <button class="btn primary" type="submit" value="save">Kaydet</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Araç formu -->
+  <dialog id="vehicle-dialog" class="sheet">
+    <form method="dialog" id="vehicle-form" class="stack">
+      <h2 data-title>Araç Kaydı</h2>
+      <input type="hidden" name="id">
+      <label>Plaka *<input name="plate" required placeholder="34 ABC 123" autocapitalize="characters" autocomplete="off"></label>
+      <label>Araç sahibi<input name="owner" autocomplete="off"></label>
+      <label>Bağlı olduğu şirket<input name="company"></label>
+      <label>Açıklama (marka, model, renk…)<input name="description"></label>
+      <label>Yetki durumu *
+        <select name="status" required>
+          <option value="authorized">Yetkili</option>
+          <option value="unauthorized">Yetkisiz</option>
+        </select>
+      </label>
+      <label>Yetki bitiş tarihi (isteğe bağlı)<input name="validUntil" type="date"></label>
+      <p class="error" data-error></p>
+      <div class="row end">
+        <button class="btn danger" type="button" data-action="vehicle-delete" hidden>Kaydı Sil</button>
+        <span class="spacer"></span>
+        <button class="btn" value="cancel" formnovalidate>Vazgeç</button>
+        <button class="btn primary" type="submit" value="save">Kaydet</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

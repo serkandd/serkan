@@ -1,0 +1,31 @@
+{
+  "name": "guvenlik-asistani",
+  "version": "1.0.0",
+  "description": "Gerçek zamanlı yapay zekâ destekli yüz ve plaka analiz güvenlik asistanı (PWA)",
+  "scripts": {
+    "vendor": "node scripts/vendor.mjs",
+    "start": "node scripts/serve.mjs",
+    "test": "node --test tests/unit/*.test.js",
+    "e2e": "node tests/e2e/run.mjs",
+    "postinstall": "node scripts/vendor.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/serkandd/serkan.git"
+  },
+  "license": "UNLICENSED",
+  "bugs": {
+    "url": "https://github.com/serkandd/serkan/issues"
+  },
+  "homepage": "https://github.com/serkandd/serkan#readme",
+  "devDependencies": {
+    "@tesseract.js-data/eng": "^1.0.0",
+    "@vladmandic/face-api": "^1.7.15",
+    "fake-indexeddb": "^6.2.8",
+    "onnxruntime-web": "^1.31.1",
+    "tesseract.js": "^7.0.0",
+    "tesseract.js-core": "^7.0.0"
+  },
+  "type": "module",
+  "private": true
+}

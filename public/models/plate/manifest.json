@@ -1,0 +1,6 @@
+{
+  "_aciklama": "İsteğe bağlı YOLO plaka tespit modeli. Model eklemek için ONNX dosyasını bu klasöre koyup 'model' alanına dosya adını yazın (bkz. docs/MODELLER.md).",
+  "model": null,
+  "inputSize": 416,
+  "classes": { "0": "Plaka" }
+}
