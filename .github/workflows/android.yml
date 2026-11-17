@@ -3,7 +3,7 @@ name: Android APK
 on:
   push:
     branches: ["claude/realtime-ai-security-system-m6z08v"]
-    paths: ["public/**", "capacitor.config.json", "scripts/android-patch.mjs", ".github/workflows/android.yml"]
+    paths: ["public/**", "capacitor.config.json", "scripts/android-patch.mjs", "scripts/ci/**", ".github/workflows/android.yml"]
   workflow_dispatch:
 
 permissions:
@@ -52,3 +52,40 @@ jobs:
             --title "Güvenlik Asistanı – Android" \
             --notes "Telefona kurulacak APK. Kurulum: dosyayı indirip açın, 'bilinmeyen kaynaklardan yükleme' izni isterse verin. Derleme: ${GITHUB_SHA}" \
             --target "${GITHUB_SHA}"
+
+  emulator-test:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: GuvenlikAsistani-apk
+      - name: KVM etkinleştir
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Playwright (yalnızca CDP istemcisi)
+        run: npm install --no-save --ignore-scripts playwright@1.49.1
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+      - name: Emülatörde çalıştır
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          ram-size: 4096M
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back emulated
+          script: bash scripts/ci/emulator-test.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: emulator-screens
+          path: "*.png"

@@ -159,6 +159,8 @@ async function afterLogin() {
     await loadModels();
     state.modelsLoaded = true;
     $('#boot').hidden = true;
+    const failed = Object.entries(state.models).filter(([, v]) => /yüklenemedi/.test(v));
+    if (failed.length) toast(`Bazı modüller yüklenemedi, diğerleri çalışıyor. Ayrıntı: Ayarlar → Sistem Tanılama`, 'warn', 8000);
   }
   $('#app').hidden = false;
   applyRoleUi();
@@ -222,13 +224,22 @@ async function ensureAdminFresh() {
 
 /* ========================================================= MODELLER */
 
+/** Bir yükleme belirtilen sürede bitmezse hata verir; böylece tek bir model uygulamayı kilitleyemez. */
+function withTimeout(promise, ms, label) {
+  let t;
+  return Promise.race([
+    promise.finally(() => clearTimeout(t)),
+    new Promise((_, reject) => { t = setTimeout(() => reject(new Error(`${label}: ${Math.round(ms / 1000)} sn içinde yüklenemedi`)), ms); }),
+  ]);
+}
+
 async function loadModels() {
   const onp = (t) => { $('#boot-msg').textContent = t; };
 
   step('Yüz algılama modeli');
   state.face = new FaceEngine();
   try {
-    await state.face.load(onp);
+    await withTimeout(state.face.load(onp), 90_000, 'Yüz modeli');
     state.models.face = `hazır (${state.face.backend})`;
     state.models.recognition = state.face.recognitionReady ? 'hazır' : 'yüklenemedi';
     step('Yüz algılama modeli', 'done');
@@ -242,8 +253,8 @@ async function loadModels() {
   state.ocr = new PlateOcr();
   try {
     const workers = (navigator.hardwareConcurrency || 4) >= 8 ? 2 : 1;
-    await state.ocr.load(onp, { workers });
-    state.models.ocr = `hazır (${workers} worker)`;
+    await withTimeout(state.ocr.load(onp, { workers }), 100_000, 'OCR');
+    state.models.ocr = `hazır (${state.ocr.workers.length} worker, ${state.ocr.variant?.name})`;
     step('Plaka OCR motoru', 'done');
   } catch (e) {
     console.error(e);
@@ -254,7 +265,7 @@ async function loadModels() {
   step('Araç algılama modeli');
   try {
     state.vehicle = new YoloDetector({ url: VEHICLE_MODEL, inputSize: 416, classes: COCO_VEHICLE_CLASSES });
-    await state.vehicle.load();
+    await withTimeout(state.vehicle.load(), 90_000, 'Araç modeli');
     state.models.vehicle = `hazır (WASM ${self.crossOriginIsolated ? 'çok iş parçacıklı' : 'tek iş parçacıklı'})`;
     step('Araç algılama modeli', 'done');
   } catch (e) {

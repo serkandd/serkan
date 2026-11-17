@@ -20,34 +20,72 @@ export class PlateOcr {
     this.lastMs = 0;
   }
 
-  async load(onProgress = () => {}, { workers = 1 } = {}) {
+  async load(onProgress = () => {}, { workers = 1, timeoutMs = 45_000 } = {}) {
     onProgress('OCR motoru yükleniyor');
     const T = await import('../../vendor/tesseract/tesseract.esm.min.js');
     const Tesseract = T.default || T;
     this.scheduler = Tesseract.createScheduler();
+    // Dil verisi cihazda olduğundan önbellek (IndexedDB) kullanılmaz: bazı Android WebView
+    // sürümlerinde worker içi IndexedDB erişimi takılabiliyor.
+    const variants = [
+      { name: 'yerel worker', workerPath: new URL('../workers/tesseract-worker.js', import.meta.url).href, workerBlobURL: false },
+      { name: 'blob worker', workerPath: `${BASE}worker.min.js`, workerBlobURL: true },
+    ];
+    const errors = [];
     for (let i = 0; i < workers; i++) {
+      let w = null;
+      for (const v of (this.variant ? [this.variant] : variants)) {
+        onProgress(`OCR motoru yükleniyor (${v.name})`);
+        try {
+          w = await withTimeout(this._create(Tesseract, v), timeoutMs, `OCR yükleme zaman aşımı (${v.name})`);
+          this.variant = v;
+          break;
+        } catch (e) {
+          console.error('OCR worker oluşturulamadı', v.name, e);
+          errors.push(`${v.name}: ${e?.message || e}`);
+        }
+      }
+      if (!w) {
+        if (this.workers.length) break; // en az bir worker varsa onunla devam
+        throw new Error(errors.join(' | '));
+      }
+      this.workers.push(w);
+      this.scheduler.addWorker(w);
+    }
+    this.maxPending = this.workers.length * 2;
+    this.ready = true;
+  }
+
+  async _create(Tesseract, v) {
+    let created = null;
+    const p = (async () => {
       const w = await Tesseract.createWorker('eng', 1, {
-        workerPath: new URL('../workers/tesseract-worker.js', import.meta.url).href,
+        workerPath: v.workerPath,
+        workerBlobURL: v.workerBlobURL,
         corePath: `${BASE}core`,
         langPath: `${BASE}lang`,
         gzip: true,
-        cacheMethod: 'write',
-        workerBlobURL: false,
+        cacheMethod: 'none',
+        errorHandler: (e) => console.error('Tesseract', e),
       }, {
         load_system_dawg: '0',
         load_freq_dawg: '0',
       });
+      created = w;
       await w.setParameters({
         tessedit_char_whitelist: OCR_WHITELIST,
         tessedit_pageseg_mode: '7',
         preserve_interword_spaces: '0',
         user_defined_dpi: '300',
       });
-      this.workers.push(w);
-      this.scheduler.addWorker(w);
+      return w;
+    })();
+    try {
+      return await p;
+    } catch (e) {
+      try { await created?.terminate(); } catch { /* yok say */ }
+      throw e;
     }
-    this.maxPending = workers * 2;
-    this.ready = true;
   }
 
   get canAccept() {
@@ -96,4 +134,12 @@ export class PlateOcr {
     try { await this.scheduler?.terminate(); } catch { /* yok say */ }
     this.ready = false;
   }
+}
+
+function withTimeout(promise, ms, message) {
+  let t;
+  return Promise.race([
+    promise.finally(() => clearTimeout(t)),
+    new Promise((_, reject) => { t = setTimeout(() => reject(new Error(message)), ms); }),
+  ]);
 }
