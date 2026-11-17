@@ -1,55 +1,84 @@
 #!/usr/bin/env node
 /**
- * Android emülatöründe kurulu APK'nın WebView'ine Chrome DevTools protokolüyle bağlanır,
- * ilk kurulumu yapar, modellerin yüklenmesini bekler, konsol hatalarını ve tanılama
- * bilgisini yazdırır, ekran görüntüsü alır. (GitHub Actions'ta çalışır.)
+ * Android emülatöründe kurulu APK'nın WebView'ine Chrome DevTools protokolüyle (ham CDP) bağlanır,
+ * ilk kurulumu yapar, modellerin yüklenmesini bekler, konsol hatalarını ve tanılama bilgisini
+ * yazdırır, ekran görüntüsü alır. (GitHub Actions'ta çalışır, Node 22 yerleşik WebSocket kullanır.)
  */
 import { execSync } from 'node:child_process';
-import { chromium } from 'playwright';
+import { writeFileSync } from 'node:fs';
 
 const sh = (c) => execSync(c, { encoding: 'utf8' }).trim();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 let socket = '';
 for (let i = 0; i < 60 && !socket; i++) {
-  const lines = sh('adb shell cat /proc/net/unix || true').split('\n');
-  const l = lines.find((x) => x.includes('webview_devtools_remote'));
+  const l = sh('adb shell cat /proc/net/unix || true').split('\n').find((x) => x.includes('webview_devtools_remote'));
   if (l) socket = l.trim().split(/\s+/).pop().replace(/^@/, '');
   else await sleep(2000);
 }
 if (!socket) { console.log('WebView DevTools soketi bulunamadı'); process.exit(1); }
 sh(`adb forward tcp:9222 localabstract:${socket}`);
-console.log('DevTools soketi:', socket);
 
-const browser = await chromium.connectOverCDP('http://127.0.0.1:9222');
-const ctx = browser.contexts()[0];
-let page = ctx.pages()[0];
-for (let i = 0; i < 30 && !page; i++) { await sleep(1000); page = ctx.pages()[0]; }
-const logs = [];
-page.on('console', (m) => logs.push(`[${m.type()}] ${m.text().slice(0, 400)}`));
-page.on('pageerror', (e) => logs.push(`[pageerror] ${e.message}`));
-console.log('URL:', page.url(), 'UA:', await page.evaluate(() => navigator.userAgent));
-
-const t0 = Date.now();
-try {
-  await page.waitForSelector('#setup-form:not([hidden]), #login-form:not([hidden])', { timeout: 60_000 });
-  if (await page.$('#setup-form:not([hidden])')) {
-    await page.fill('#setup-form [name=password]', 'TestParola2026');
-    await page.fill('#setup-form [name=password2]', 'TestParola2026');
-    await page.click('#setup-form button[type=submit]');
-  }
-  await page.waitForSelector('#app:not([hidden])', { timeout: 300_000 });
-  console.log(`Uygulama açıldı: ${((Date.now() - t0) / 1000).toFixed(1)} sn`);
-} catch (e) {
-  console.log('HATA:', e.message);
-  console.log('Açılış adımları:', await page.$eval('#boot', (el) => el.innerText).catch(() => '-'));
+let target;
+for (let i = 0; i < 30 && !target; i++) {
+  const list = await (await fetch('http://127.0.0.1:9222/json')).json().catch(() => []);
+  target = list.find((t) => t.type === 'page');
+  if (!target) await sleep(1000);
 }
-await sleep(15_000);
-await page.screenshot({ path: 'emulator-live.png' }).catch(() => {});
-const diag = await page.evaluate(() => JSON.stringify(window.__app?.models || {}, null, 1)).catch(() => '-');
-console.log('Modeller:', diag);
-const status = await page.evaluate(() => [...document.querySelectorAll('.chip')].map((c) => c.innerText.replace(/\n/g, ' ')).join(' | ')).catch(() => '-');
-console.log('Durum:', status);
+console.log('Hedef:', target?.url);
+const ws = new WebSocket(target.webSocketDebuggerUrl);
+await new Promise((r) => ws.addEventListener('open', r, { once: true }));
+let id = 0;
+const pending = new Map();
+const logs = [];
+ws.addEventListener('message', (ev) => {
+  const m = JSON.parse(ev.data);
+  if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); return; }
+  if (m.method === 'Runtime.consoleAPICalled') {
+    logs.push(`[${m.params.type}] ${m.params.args.map((a) => a.value ?? a.description ?? '').join(' ').slice(0, 500)}`);
+  } else if (m.method === 'Runtime.exceptionThrown') {
+    const d = m.params.exceptionDetails;
+    logs.push(`[exception] ${d.exception?.description || d.text}`.slice(0, 800));
+  } else if (m.method === 'Log.entryAdded') {
+    logs.push(`[log:${m.params.entry.level}] ${m.params.entry.text} ${m.params.entry.url || ''}`.slice(0, 500));
+  }
+});
+const cdp = (method, params = {}) => new Promise((resolve) => {
+  const i = ++id;
+  pending.set(i, resolve);
+  ws.send(JSON.stringify({ id: i, method, params }));
+});
+const evaluate = async (expression) => {
+  const r = await cdp('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
+  return r.result?.result?.value;
+};
+await cdp('Runtime.enable');
+await cdp('Log.enable');
+await cdp('Page.enable');
+
+const waitFor = async (expr, ms) => {
+  const t = Date.now();
+  while (Date.now() - t < ms) { if (await evaluate(expr)) return true; await sleep(1000); }
+  return false;
+};
+
+console.log('UA:', await evaluate('navigator.userAgent'));
+const t0 = Date.now();
+await waitFor(`!!document.querySelector('#setup-form:not([hidden]), #login-form:not([hidden])')`, 60_000);
+if (await evaluate(`!!document.querySelector('#setup-form:not([hidden])')`)) {
+  await evaluate(`(() => { const f = document.querySelector('#setup-form');
+    f.password.value = 'TestParola2026'; f.password2.value = 'TestParola2026';
+    f.requestSubmit(); return true; })()`);
+}
+const opened = await waitFor(`!document.querySelector('#app').hidden`, 300_000);
+console.log(opened ? `Uygulama açıldı: ${((Date.now() - t0) / 1000).toFixed(1)} sn` : 'UYGULAMA AÇILMADI (300 sn)');
+console.log('Açılış ekranı:', await evaluate(`document.querySelector('#boot').innerText`));
+await sleep(20_000);
+console.log('Modeller:', await evaluate(`JSON.stringify(window.__app?.models || {})`));
+console.log('Durum:', await evaluate(`[...document.querySelectorAll('.chip')].map((c) => c.innerText.replace(/\\n/g, ' ')).join(' | ')`));
+console.log('İzolasyon:', await evaluate('self.crossOriginIsolated'), 'Çekirdek:', await evaluate('navigator.hardwareConcurrency'));
+const shot = await cdp('Page.captureScreenshot', { format: 'png' });
+if (shot.result?.data) writeFileSync('webview.png', Buffer.from(shot.result.data, 'base64'));
 console.log('--- Konsol ---');
 for (const l of logs) console.log(l);
-await browser.close().catch(() => {});
+ws.close();

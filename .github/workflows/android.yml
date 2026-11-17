@@ -71,10 +71,6 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Playwright (yalnızca CDP istemcisi)
-        run: npm install --no-save --ignore-scripts playwright@1.49.1
-        env:
-          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
       - name: Emülatörde çalıştır
         uses: reactivecircus/android-emulator-runner@v2
         with:
