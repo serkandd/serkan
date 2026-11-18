@@ -66,8 +66,12 @@ console.log('UA:', await evaluate('navigator.userAgent'));
 const t0 = Date.now();
 // PIN'siz kullanım: uygulama giriş ekranı olmadan açılmalı
 await waitFor(`!document.querySelector('#app').hidden || !!document.querySelector('#login-form:not([hidden])')`, 120_000);
-console.log('Giriş ekranı:', await evaluate(`document.querySelector('#auth').hidden ? 'yok (doğrudan açıldı)' : 'göründü'`));
+console.log('Giriş ekranı:', await evaluate(`document.querySelector('#auth').hidden ? 'yok (doğrudan açıldı)' : 'göründü: ' + document.querySelector('#auth').innerText.slice(0, 200).replace(/\\n/g, ' | ')`));
+// Ws kapanırsa (WebView çökmesi) süreç sessizce bitmesin: kayıtları her durumda yazdır
+const keepAlive = setInterval(() => {}, 1000);
+ws.addEventListener('close', () => { console.log('!!! DevTools bağlantısı kapandı (WebView yeniden başladı/çöktü)'); for (const l of logs) console.log(l); clearInterval(keepAlive); process.exit(0); });
 const opened = await waitFor(`!document.querySelector('#app').hidden`, 300_000);
+if (!opened) { console.log('Ekran:', await evaluate(`document.body.innerText.slice(0, 400)`)); for (const l of logs) console.log(l); }
 // Yeni kurulumda çıkan "eski kayıtlarınız var mı" penceresini kapat (yeni başla)
 await waitFor(`!!document.querySelector('#restore-dialog[open]')`, 15_000);
 console.log('Geri yükleme önerisi:', await evaluate(`document.querySelector('#restore-dialog').open ? 'gösterildi' : 'yok'`));
