@@ -154,3 +154,85 @@ export function correctPlate(raw, opts = {}) {
 export function plateKey(text) {
   return sanitizeRaw(text);
 }
+
+/**
+ * Derin öğrenme OCR'ının karakter olasılıklarından Türk plaka formatına uyan EN OLASI plakayı bulur.
+ *
+ * Model her karakter yuvası için tüm sınıfların olasılığını verir. Burada her geçerli Türk plaka
+ * kalıbı (il kodu 01-81 + 1-3 harf + 2-5 rakam) için toplam log-olasılık hesaplanır ve en yükseği
+ * seçilir. Böylece "0/O", "8/B", "1/I" gibi karışıklıklar konuma göre doğru çözülür; formata uymayan
+ * okumalar zorla eşleştirilmez (güven düşük çıkar).
+ *
+ * @param {Float32Array|number[]} probs  [slots × alphabet.length] olasılıklar (softmax sonrası)
+ * @param {object} cfg {slots, alphabet, padChar}
+ * @returns {{plate:string, confidence:number, charConf:number[], raw:string, rawConf:number}|null}
+ */
+export function decodeTurkishPlate(probs, { slots = 10, alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_', padChar = '_' } = {}) {
+  const A = alphabet.length;
+  const eps = 1e-6;
+  const lp = (slot, ch) => Math.log(Math.max(eps, probs[slot * A + alphabet.indexOf(ch)]));
+  const digitIdx = [...PLATE_DIGITS].map((c) => alphabet.indexOf(c));
+  const letterIdx = [...PLATE_LETTERS].map((c) => alphabet.indexOf(c));
+  const padIdx = alphabet.indexOf(padChar);
+
+  // Ham (kısıtsız) okuma: karşılaştırma ve tanılama için
+  let raw = '', rawLog = 0;
+  for (let s = 0; s < slots; s++) {
+    let best = 0;
+    for (let k = 1; k < A; k++) if (probs[s * A + k] > probs[s * A + best]) best = k;
+    rawLog += Math.log(Math.max(eps, probs[s * A + best]));
+    raw += alphabet[best];
+  }
+  raw = raw.replace(new RegExp(`${padChar}+$`), '').replaceAll(padChar, '');
+
+  const bestOf = (slot, idxs) => {
+    let bi = idxs[0], bv = -Infinity;
+    for (const i of idxs) {
+      const v = Math.log(Math.max(eps, probs[slot * A + i]));
+      if (v > bv) { bv = v; bi = i; }
+    }
+    return { ch: alphabet[bi], lp: bv };
+  };
+  // Sondaki boş yuvaların log-olasılığı (önceden toplanmış)
+  const padTail = new Float64Array(slots + 1);
+  for (let s = slots - 1; s >= 0; s--) padTail[s] = padTail[s + 1] + Math.log(Math.max(eps, probs[s * A + padIdx]));
+
+  // İl kodu: 01-81 arası en olası iki rakam
+  let prov = null;
+  for (let n = 1; n <= 81; n++) {
+    const code = String(n).padStart(2, '0');
+    const v = lp(0, code[0]) + lp(1, code[1]);
+    if (!prov || v > prov.lp) prov = { code, lp: v };
+  }
+
+  let best = null;
+  for (const [nL, ds] of Object.entries(GROUP_RULES)) {
+    for (const nD of ds) {
+      const len = 2 + Number(nL) + nD;
+      if (len > slots) continue;
+      let total = prov.lp;
+      let text = prov.code;
+      const chars = [];
+      for (let s = 2; s < len; s++) {
+        const r = bestOf(s, s < 2 + Number(nL) ? letterIdx : digitIdx);
+        total += r.lp;
+        text += r.ch;
+        chars.push(r.lp);
+      }
+      total += padTail[len];
+      if (!best || total > best.total) best = { text, total, len };
+    }
+  }
+  if (!best) return null;
+  const charConf = [];
+  for (let s = 0; s < best.len; s++) charConf.push(probs[s * A + alphabet.indexOf(best.text[s])]);
+  // Güven: tüm yuvaların birleşik olasılığı (geometrik ortalama değil, çarpım) — tek şüpheli karakter güveni düşürür
+  return {
+    plate: best.text,
+    confidence: Math.exp(best.total),
+    charConf,
+    raw,
+    rawConf: Math.exp(rawLog),
+    valid: isValidTurkishPlate(best.text),
+  };
+}

@@ -5,8 +5,7 @@
  * biçimindedir (örn. "Renault|Clio"). Model yoksa marka/model alanları elle doldurulur.
  * Eğitim: scripts/train_vehicle_make_model.py
  */
-import { loadOrt } from './yolo-detector.js';
-import { fetchBinary } from '../util/fetch-binary.js';
+import { loadOrt, createSession } from './yolo-detector.js';
 
 const MANIFEST = new URL('../../models/vehicle-make/manifest.json', import.meta.url).href;
 
@@ -24,7 +23,7 @@ export class VehicleMakeClassifier {
     this.inputSize = m.inputSize || 224;
     this.minConfidence = m.minConfidence ?? 0.6;
     this.ort = await loadOrt();
-    this.session = await this.ort.InferenceSession.create(await fetchBinary(new URL(m.model, MANIFEST).href), { executionProviders: ['wasm'] });
+    this.session = await createSession(new URL(m.model, MANIFEST).href);
     this.inputName = this.session.inputNames[0];
     this.outputName = this.session.outputNames[0];
     this.ready = true;

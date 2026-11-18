@@ -1,0 +1,9 @@
+{
+  "_aciklama": "Plaka OCR: fast-plate-ocr cct-s-v2-global (MIT). 60+ ülke plakası, Türkiye dahil. Girdi 64x128 RGB uint8, çıktı 10 karakter yuvası x 37 sınıf olasılık.",
+  "model": "cct-s-v2-global.onnx",
+  "imgHeight": 64,
+  "imgWidth": 128,
+  "slots": 10,
+  "alphabet": "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_",
+  "padChar": "_"
+}

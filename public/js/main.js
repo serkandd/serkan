@@ -7,7 +7,9 @@ import * as auth from './storage/auth.js';
 import * as repo from './storage/repos.js';
 import { CameraManager } from './camera/camera.js';
 import { FaceEngine } from './detection/face-engine.js';
-import { YoloDetector, COCO_VEHICLE_CLASSES } from './detection/yolo-detector.js';
+import { YoloDetector, COCO_VEHICLE_CLASSES, runtimeInfo } from './detection/yolo-detector.js';
+import { FaceEngineOnnx } from './detection/face-engine-onnx.js';
+import { PlateRecognizer } from './ocr/plate-recognizer.js';
 import { PlateOcr } from './ocr/plate-ocr.js';
 import { Analyzer } from './pipeline/analyzer.js';
 import { Overlay } from './ui/overlay.js';
@@ -197,6 +199,7 @@ async function afterLogin() {
     await loadModels();
     state.modelsLoaded = true;
     $('#boot').hidden = true;
+    migrateFaceTemplates();
     const failed = Object.entries(state.models).filter(([, v]) => /yüklenemedi/.test(v));
     if (failed.length) toast(`Bazı modüller yüklenemedi, diğerleri çalışıyor. Ayrıntı: Ayarlar → Sistem Tanılama`, 'warn', 8000);
   }
@@ -271,62 +274,72 @@ function withTimeout(promise, ms, label) {
 async function loadModels() {
   const onp = (t) => { $('#boot-msg').textContent = t; };
 
-  step('Yüz algılama modeli');
-  state.face = new FaceEngine();
+  // Yüz: SCRFD + ArcFace (ONNX). Yüklenemezse eski face-api motoruna düşülür.
+  step('Yüz algılama ve tanıma');
   try {
-    await withTimeout(state.face.load(onp), 90_000, 'Yüz modeli');
-    state.models.face = `hazır (${state.face.backend})`;
-    state.models.recognition = state.face.recognitionReady ? 'hazır' : 'yüklenemedi';
-    step('Yüz algılama modeli', 'done');
+    state.face = new FaceEngineOnnx();
+    await withTimeout(state.face.load(onp), 120_000, 'Yüz modeli');
+    state.models.face = `hazır (SCRFD, ${state.face.backend === 'webgpu' ? 'GPU' : 'WASM'})`;
+    state.models.recognition = 'hazır (ArcFace 512B)';
+    step('Yüz algılama ve tanıma', 'done');
   } catch (e) {
-    console.error(e);
-    state.models.face = `yüklenemedi: ${e.message}`;
-    step('Yüz algılama modeli', 'fail');
-  }
-
-  step('Plaka OCR motoru');
-  state.ocr = new PlateOcr();
-  try {
-    const workers = (navigator.hardwareConcurrency || 4) >= 8 ? 2 : 1;
-    await withTimeout(state.ocr.load(onp, { workers }), 100_000, 'OCR');
-    state.models.ocr = `hazır (${state.ocr.workers.length} worker, ${state.ocr.variant?.name})`;
-    step('Plaka OCR motoru', 'done');
-  } catch (e) {
-    console.error(e);
-    state.models.ocr = `yüklenemedi: ${e.message}`;
-    step('Plaka OCR motoru', 'fail');
+    console.error('Yeni yüz motoru yüklenemedi, eski motor deneniyor', e);
+    try {
+      state.face = new FaceEngine();
+      await withTimeout(state.face.load(onp), 90_000, 'Yüz modeli');
+      state.models.face = `hazır (yedek face-api, ${state.face.backend})`;
+      state.models.recognition = state.face.recognitionReady ? 'hazır (yedek)' : 'yüklenemedi';
+      step('Yüz algılama ve tanıma', 'done');
+    } catch (e2) {
+      console.error(e2);
+      state.models.face = `yüklenemedi: ${e.message}`;
+      step('Yüz algılama ve tanıma', 'fail');
+    }
   }
 
   step('Araç algılama modeli');
   try {
     state.vehicle = new YoloDetector({ url: VEHICLE_MODEL, inputSize: 416, classes: COCO_VEHICLE_CLASSES });
     await withTimeout(state.vehicle.load(), 90_000, 'Araç modeli');
-    state.models.vehicle = `hazır (WASM ${self.crossOriginIsolated ? 'çok iş parçacıklı' : 'tek iş parçacıklı'})`;
+    state.models.vehicle = `hazır (${runtimeInfo.provider === 'webgpu' ? 'GPU' : `WASM ${runtimeInfo.threads} iş parçacığı`})`;
     step('Araç algılama modeli', 'done');
   } catch (e) {
     console.error(e);
     state.vehicle = null;
-    state.models.vehicle = `yüklenemedi: ${e.message} — plaka araması tüm karede yapılacak`;
+    state.models.vehicle = `yüklenemedi: ${e.message}`;
     step('Araç algılama modeli', 'fail');
   }
 
-  step('Plaka tespit modeli (isteğe bağlı)');
+  // Plaka: YOLOv9 plaka bulucu + derin öğrenme OCR. Yüklenemezse klasik bulucu + Tesseract.
+  step('Plaka tespit ve okuma modelleri');
   try {
     const pm = await fetch(PLATE_MANIFEST).then((r) => (r.ok ? r.json() : null)).catch(() => null);
-    if (pm?.model) {
-      const url = new URL(pm.model, PLATE_MANIFEST).href;
-      state.plateModel = new YoloDetector({ url, inputSize: pm.inputSize || 416, classes: pm.classes || { 0: 'Plaka' } });
-      await state.plateModel.load();
-      state.models.plateModel = 'hazır (YOLO plaka modeli)';
-    } else {
-      state.models.plateModel = 'yok — yerleşik plaka bulucu kullanılıyor';
-    }
-    step('Plaka tespit modeli (isteğe bağlı)', 'done');
+    if (!pm?.model) throw new Error('plaka modeli tanımlı değil');
+    state.plateDetector = new YoloDetector({
+      url: new URL(pm.model, PLATE_MANIFEST).href, inputSize: pm.inputSize || 384,
+      classes: pm.classes || { 0: 'Plaka' }, format: pm.format || 'yolov8',
+    });
+    await withTimeout(state.plateDetector.load(), 90_000, 'Plaka modeli');
+    state.plateOcr = new PlateRecognizer();
+    await withTimeout(state.plateOcr.load(), 60_000, 'Plaka OCR');
+    state.models.plateModel = 'hazır (YOLOv9 plaka bulucu)';
+    state.models.ocr = 'hazır (derin öğrenme OCR, Türk format çözümleyici)';
+    step('Plaka tespit ve okuma modelleri', 'done');
   } catch (e) {
-    console.error(e);
-    state.plateModel = null;
-    state.models.plateModel = `yüklenemedi: ${e.message}`;
-    step('Plaka tespit modeli (isteğe bağlı)', 'fail');
+    console.error('Plaka modelleri yüklenemedi, yedek yönteme geçiliyor', e);
+    state.plateDetector = null;
+    state.plateOcr = null;
+    state.models.plateModel = `yüklenemedi (${e.message}) — yerleşik plaka bulucu`;
+    state.ocr = new PlateOcr();
+    try {
+      await withTimeout(state.ocr.load(onp, { workers: 1 }), 100_000, 'OCR');
+      state.models.ocr = 'hazır (yedek Tesseract)';
+      step('Plaka tespit ve okuma modelleri', 'done');
+    } catch (e2) {
+      console.error(e2);
+      state.models.ocr = `yüklenemedi: ${e2.message}`;
+      step('Plaka tespit ve okuma modelleri', 'fail');
+    }
   }
 
   state.makeClassifier = new VehicleMakeClassifier();
@@ -345,7 +358,9 @@ async function loadModels() {
     video: $('#video'),
     face: state.face?.ready ? state.face : null,
     vehicle: state.vehicle,
-    plateModel: state.plateModel,
+    plateModel: null,
+    plateDetector: state.plateDetector,
+    plateOcr: state.plateOcr,
     plateWorker: state.plateWorker,
     ocr: state.ocr?.ready ? state.ocr : null,
     registry: { personnel: repo.personnel, findVehicleByPlate: repo.findVehicleByPlate },
@@ -629,7 +644,49 @@ $('#qe-form').addEventListener('submit', async (e) => {
   }
 });
 
+/** Eski (face-api) şablonları olan kişiler için kayıtlı küçük yüz resminden yeni ArcFace şablonu üretir */
+async function migrateFaceTemplates() {
+  if (!(state.face instanceof FaceEngineOnnx) || !state.face.recognitionReady || !auth.can('personnel')) return;
+  let migrated = 0;
+  for (const p of repo.personnel()) {
+    const has512 = (p.descriptors || []).some((d) => d.length === 512);
+    if (has512 || !p.photo) continue;
+    try {
+      const img = new Image();
+      img.src = p.photo;
+      await img.decode();
+      // Küçük resmin çevresine boşluk ekle: algılayıcı yüzü kenarda değil ortada görsün
+      const c = document.createElement('canvas');
+      c.width = img.width * 2; c.height = img.height * 2;
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#808080';
+      ctx.fillRect(0, 0, c.width, c.height);
+      ctx.drawImage(img, img.width / 2, img.height / 2);
+      const r = await state.face.describeStill(c, { minSize: 40 });
+      if (!r.descriptor) continue;
+      await repo.savePersonnel({ ...p, descriptors: [...(p.descriptors || []), r.descriptor] });
+      migrated++;
+    } catch (e) {
+      console.error('Şablon yenilenemedi', p.fullName, e);
+    }
+  }
+  const stale = repo.personnel().filter((p) => p.descriptors?.length && !p.descriptors.some((d) => d.length === 512));
+  if (migrated) toast(`${migrated} kişinin yüz şablonu yeni tanıma modeline aktarıldı.`, 'ok', 6000);
+  if (stale.length) toast(`${stale.map((p) => p.fullName).join(', ')}: yüz kaydını yenileyin (Yüzümü kaydet).`, 'warn', 9000);
+}
+
 function wireAnalyzer() {
+  // Uyarlanabilir öğrenme: güvenle tanınan kişiye yeni görünüm şablonu ekle
+  state.analyzer.addEventListener('learn', async (e) => {
+    const p = repo.personnel().find((x) => x.id === e.detail.personId);
+    if (!p || !auth.can('personnel')) return;
+    try {
+      await repo.savePersonnel({ ...p, descriptors: [...(p.descriptors || []), e.detail.descriptor].slice(-16) });
+    } catch (ex) {
+      console.error('Öğrenme kaydedilemedi', ex);
+    }
+  });
+
   setInterval(updateQuickEnroll, 400);
 
   const a = state.analyzer;
@@ -1081,11 +1138,12 @@ const SETTINGS_SCHEMA = [
   { key: 'resolution', label: 'Kamera çözünürlüğü', type: 'select', options: [['720p', '720p (pil tasarrufu)'], ['1080p', '1080p (önerilen)'], ['1440p', '1440p (uzak mesafe)'], ['2160p', '4K (en uzak mesafe, yüksek ısınma)']] },
   { key: 'targetFps', label: 'Yüz analizi hedef FPS', type: 'number', min: 2, max: 30 },
   { key: 'detector', label: 'Yüz algılayıcı', type: 'select', options: [['tiny', 'Hızlı (TinyFaceDetector)'], ['ssd', 'Doğru (SSD MobileNet)']] },
-  { key: 'faceInputSize', label: 'Yüz modeli giriş boyutu', type: 'select', options: [['320', '320 (hızlı)'], ['416', '416'], ['512', '512'], ['608', '608 (küçük yüzler)']] },
+  { key: 'faceInputSize', label: 'Yüz modeli giriş boyutu', type: 'select', options: [['320', '320 (hızlı)'], ['416', '416'], ['480', '480 (önerilen)'], ['640', '640 (uzaktaki küçük yüzler)']] },
   { key: 'longRangeTiles', label: 'Uzak mesafe modu (karo analizi, 5-10 m)', type: 'checkbox' },
   { group: 'Yüz doğrulama' },
-  { key: 'faceMatchThreshold', label: 'Eşleşme mesafe eşiği (düşük = katı)', type: 'number', min: 0.3, max: 0.6, step: 0.01 },
-  { key: 'faceMatchMargin', label: 'Belirsizlik payı', type: 'number', min: 0, max: 0.2, step: 0.01 },
+  { key: 'faceSimThreshold', label: 'Eşleşme benzerlik eşiği (yüksek = katı, önerilen 0.42)', type: 'number', min: 0.25, max: 0.7, step: 0.01 },
+  { key: 'faceSimMargin', label: 'Belirsizlik payı (iki kişi arası en az fark)', type: 'number', min: 0, max: 0.2, step: 0.01 },
+  { key: 'faceAdaptiveLearning', label: 'Tanınan kişinin yeni görünümlerini öğren (ışık, açı, gözlük)', type: 'checkbox' },
   { key: 'faceMinSizePx', label: 'Doğrulama için en küçük yüz (px)', type: 'number', min: 48, max: 200 },
   { key: 'faceMinScore', label: 'En düşük algılama güveni', type: 'number', min: 0.5, max: 0.99, step: 0.01 },
   { key: 'faceVerifyVotes', label: 'Kesin sonuç için gereken kare', type: 'number', min: 1, max: 10 },
@@ -1271,7 +1329,8 @@ async function renderDiag() {
     ['Çapraz köken izolasyonu', self.crossOriginIsolated ? 'etkin (çok iş parçacığı)' : 'yok (tek iş parçacığı)'],
     ['İşlemci çekirdeği', navigator.hardwareConcurrency || '?'],
     ['Kamera', info ? `${info.width}×${info.height} · ${info.label}` : 'kapalı'],
-    ['Süreler', `yüz ${ms('face')} · şablon ${ms('faceDescribe')} · plaka ${ms('plate')} · OCR ${ms('ocr')}`],
+    ['Hesaplama', runtimeInfo.provider === 'webgpu' ? 'GPU (WebGPU)' : `İşlemci (WASM, ${runtimeInfo.threads} iş parçacığı)`],
+    ['Süreler', `yüz ${ms('face')} · tanıma ${ms('faceDescribe')} · plaka bulma ${ms('plateDetect')} · plaka toplam ${ms('plate')} · OCR ${ms('ocr')}`],
     ['İşlemci baskısı', a?.perf.pressure || '—'],
     ['JS bellek', mem ? `${mem.usedMB} / ${mem.limitMB} MB` : '—'],
     ['TF.js tensör', tfm ? `${tfm.numTensors} tensör · ${(tfm.numBytes / 1048576).toFixed(1)} MB` : '—'],

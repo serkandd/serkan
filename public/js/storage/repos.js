@@ -13,20 +13,23 @@ export const DEFAULT_SETTINGS = {
   storePlateThumbnails: true,
   storeFaceThumbnails: true,   // olay listesinde yüz küçük resmi
   dedupSeconds: 60,
-  faceMatchThreshold: 0.45,     // Öklid mesafesi; düşük = daha katı
+  faceSimThreshold: 0.42,       // ArcFace kosinüs benzerliği; yüksek = daha katı
+  faceSimMargin: 0.07,          // en iyi iki kişi arasında en az fark
+  faceAdaptiveLearning: true,   // güvenle tanınan kişinin yeni görünümlerini öğren
+  faceMatchThreshold: 0.45,     // (eski face-api şablonları için) Öklid mesafesi
   faceMatchMargin: 0.06,        // en iyi ve ikinci en iyi aday arası en az fark
-  faceMinSizePx: 72,            // kimlik doğrulama için en küçük yüz genişliği
-  faceMinScore: 0.75,           // yüz algılama güven eşiği (doğrulama için)
-  faceVerifyVotes: 3,           // kesin kimlik için gereken tutarlı kare sayısı
-  plateMinOcrConf: 0.4,         // tek kare OCR güveni alt sınırı (ortalama)
-  plateVotes: 3,                // kesin sonuç için aynı metnin okunduğu en az kare
+  faceMinSizePx: 56,            // kimlik doğrulama için en küçük yüz genişliği
+  faceMinScore: 0.6,            // yüz algılama güven eşiği (doğrulama için)
+  faceVerifyVotes: 2,           // kesin kimlik için gereken tutarlı kare sayısı
+  plateMinOcrConf: 0.5,         // birleşik OCR güveni alt sınırı
+  plateVotes: 2,                // kesin sonuç için en az okuma (kare)
   allowedForeignLetters: false,
   autoLockMinutes: 5,
   speak: false,
   sound: true,
   vibrate: true,
   detector: 'tiny',             // 'tiny' (hızlı) | 'ssd' (daha doğru)
-  faceInputSize: 416,
+  faceInputSize: 480,
   longRangeTiles: false,        // uzak mesafe için 2'li karo analizi
   resolution: '1080p',          // 720p | 1080p | 1440p | 2160p
   targetFps: 12,

@@ -6,7 +6,7 @@
  *
  * Kullanım: npm run vendor
  */
-import { cpSync, mkdirSync, existsSync, readdirSync, writeFileSync, statSync } from 'node:fs';
+import { cpSync, mkdirSync, existsSync, readdirSync, writeFileSync, statSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -44,10 +44,11 @@ for (const f of readdirSync(join(nm, 'tesseract.js-core'))) {
 // (bkz. js/workers/tesseract-worker.js)
 copy('@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz', 'vendor/tesseract/lang/eng.traineddata.gz.wasm');
 
-console.log('ONNX Runtime Web (WASM, SIMD + çoklu iş parçacığı)');
-copy('onnxruntime-web/dist/ort.wasm.min.mjs', 'vendor/ort/ort.wasm.min.mjs');
-copy('onnxruntime-web/dist/ort-wasm-simd-threaded.mjs', 'vendor/ort/ort-wasm-simd-threaded.mjs');
-copy('onnxruntime-web/dist/ort-wasm-simd-threaded.wasm', 'vendor/ort/ort-wasm-simd-threaded.wasm');
+console.log('ONNX Runtime Web (WebGPU + WASM SIMD)');
+rmSync(join(pub, 'vendor/ort'), { recursive: true, force: true });
+copy('onnxruntime-web/dist/ort.min.mjs', 'vendor/ort/ort.min.mjs');
+copy('onnxruntime-web/dist/ort-wasm-simd-threaded.jsep.mjs', 'vendor/ort/ort-wasm-simd-threaded.jsep.mjs');
+copy('onnxruntime-web/dist/ort-wasm-simd-threaded.jsep.wasm', 'vendor/ort/ort-wasm-simd-threaded.jsep.wasm');
 
 // Service worker önbellek listesi (çevrimdışı çalışma için)
 const files = [];

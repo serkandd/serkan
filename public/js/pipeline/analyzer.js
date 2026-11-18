@@ -17,7 +17,8 @@
  */
 import { MultiObjectTracker } from '../tracking/tracker.js';
 import { Consensus, Deduplicator } from '../tracking/consensus.js';
-import { matchFace, distanceToScore } from '../detection/face-match.js';
+import { matchFace, cosine } from '../detection/face-match.js';
+import { nms } from '../vision/imgproc.js';
 import { formatPlate } from '../ocr/turkish-plate.js';
 import { PerfMonitor } from './perf-monitor.js';
 import { estimateVehicleColor } from '../detection/vehicle-color.js';
@@ -198,9 +199,20 @@ export class Analyzer extends EventTarget {
       if (!t.data.decided) t.data.result = { ...FACE_RESULT.LOW_QUALITY, label: `Kalite yetersiz: ${quality.reason}` };
       return;
     }
-    const m = matchFace(descriptor, people, { threshold: s.faceMatchThreshold, margin: s.faceMatchMargin });
-    if (m.matched) t.data.consensus.add(m.person.id, distanceToScore(m.distance) / 100);
-    else t.data.consensus.add('__none__', 0.8);
+    const m = matchFace(descriptor, people, {
+      threshold: s.faceMatchThreshold, margin: s.faceMatchMargin,
+      simThreshold: s.faceSimThreshold, simMargin: s.faceSimMargin,
+    });
+    t.data.lastScore = m.score;
+    if (m.matched) {
+      // Çok güçlü ve kaliteli eşleşmede tek kare yeterli; aksi halde oylama
+      const strong = m.similarity != null && m.similarity >= (s.faceSimThreshold ?? 0.42) + 0.18;
+      t.data.consensus.add(m.person.id, m.score / 100);
+      if (strong) t.data.consensus.add(m.person.id, m.score / 100);
+      this._maybeLearn(m, descriptor, quality);
+    } else {
+      t.data.consensus.add('__none__', m.reason === 'Belirsiz eşleşme' ? 0.5 : 0.8);
+    }
 
     const r = t.data.consensus.result();
     if (!r?.decided) {
@@ -222,6 +234,25 @@ export class Analyzer extends EventTarget {
       t.data.result = person?.status === 'authorized' ? FACE_RESULT.VERIFIED_AUTH : FACE_RESULT.VERIFIED_UNAUTH;
       if (prevKey !== r.value) this._emitFace(t, person, r.confidence);
     }
+  }
+
+  /**
+   * Uyarlanabilir öğrenme: kişi yüksek güvenle ve iyi kalitede tanındığında, kayıtlı şablonlarından
+   * belirgin şekilde farklı (yeni ışık / açı / gözlük vb.) bir görünüm ise şablon olarak eklenir.
+   * Yanlış kişiye kaymayı önlemek için yalnızca çok yüksek benzerlikte ve seyrek yapılır.
+   */
+  _maybeLearn(m, descriptor, quality) {
+    if (!this.settings.faceAdaptiveLearning || m.similarity == null) return;
+    if (m.similarity < (this.settings.faceSimThreshold ?? 0.42) + 0.12 || quality.frontal < 0.6) return;
+    const p = m.person;
+    const tpl = (p.descriptors || []).filter((d) => d.length === descriptor.length);
+    if (tpl.length >= 12) return;
+    this._learnedAt = this._learnedAt || new Map();
+    if (Date.now() - (this._learnedAt.get(p.id) || 0) < 60_000) return;
+    const maxSim = Math.max(...tpl.map((d) => cosine(descriptor, d)));
+    if (maxSim > 0.8) return; // zaten benzer bir şablon var
+    this._learnedAt.set(p.id, Date.now());
+    this.dispatchEvent(new CustomEvent('learn', { detail: { personId: p.id, descriptor: Array.from(descriptor) } }));
   }
 
   /** Yüzün küçük resmi (olay listesinde gösterilir) */
@@ -287,6 +318,21 @@ export class Analyzer extends EventTarget {
       if (!this._videoReady()) { await sleep(200); continue; }
       const t0 = performance.now();
       cycle++;
+      if (this.plateDetector?.ready && this.plateOcr?.ready) {
+        try {
+          await this._plateCycleModel(cycle, t0);
+          this._plateErrors = 0;
+        } catch (err) {
+          this._plateErrors++;
+          console.error('Plaka döngüsü hatası', err);
+          if (this._plateErrors > 3) {
+            this._setStatus('plate', 'error', 'Plaka analizi hata veriyor, yeniden deneniyor');
+            await sleep(1500);
+          }
+        }
+        await sleep(this.perf.nextDelay('plate', 6));
+        continue;
+      }
       try {
         // 1) Araç algılama
         let vehicles = [];
@@ -329,6 +375,124 @@ export class Analyzer extends EventTarget {
       }
       await sleep(this.perf.nextDelay('plate', 5));
     }
+  }
+
+  /**
+   * Model tabanlı plaka döngüsü:
+   *  1. Araç algılama (her 2 döngüde bir) → araç bölgeleri
+   *  2. Plaka algılama: en büyük 2 aracın plaka bölgesinde (yakınlaştırılmış) + dönüşümlü tarama
+   *     (tam kare / sol-üst yarı / sağ-alt yarı) → uzak plakalar da modele büyük girer
+   *  3. Takip → okunmamış plakalar tek seferde (batch) OCR → kareler arası olasılık birleştirme
+   */
+  async _plateCycleModel(cycle, t0) {
+    const v = this.video;
+    const W = v.videoWidth, H = v.videoHeight;
+    let vehicles = this._lastVehicles || [];
+    if (this.vehicle?.ready && (cycle % 2 === 1 || !this._lastVehicles)) {
+      const r = await this.vehicle.detect(v, { scoreThreshold: 0.35 });
+      if (r) {
+        vehicles = r;
+        this._lastVehicles = r;
+        this.vehicleTracker.update(r.map((d) => ({ box: d.box, score: d.score, payload: { label: d.label } })), performance.now());
+      }
+    }
+    const regions = [];
+    for (const veh of [...vehicles].filter((x) => x.box.w > 48).sort((a, b) => b.box.w * b.box.h - a.box.w * a.box.h).slice(0, 2)) {
+      const b = veh.box;
+      const x = Math.max(0, b.x - b.w * 0.08), y = Math.max(0, b.y + b.h * 0.2);
+      regions.push({ x, y, w: Math.min(W - x, b.w * 1.16), h: Math.min(H - y, b.h * 0.9) });
+    }
+    const horiz = W >= H;
+    const L = horiz ? W : H, T = Math.round(L * 0.56);
+    const scans = [null,
+      horiz ? { x: 0, y: 0, w: T, h: H } : { x: 0, y: 0, w: W, h: T },
+      horiz ? { x: W - T, y: 0, w: T, h: H } : { x: 0, y: H - T, w: W, h: T }];
+    regions.push(scans[cycle % 3]);
+
+    let found = [];
+    for (const region of regions) {
+      const r = await this.plateDetector.detect(v, { region, scoreThreshold: 0.35 });
+      if (r) found.push(...r.map((d) => ({ ...d.box, score: d.score })));
+    }
+    found = nms(found, 0.4);
+    const now = performance.now();
+    this.plateTracker.update(found.map((b) => ({ box: { x: b.x, y: b.y, w: b.w, h: b.h }, score: b.score, payload: { fromModel: true } })), now);
+    this.perf.record('plateDetect', performance.now() - t0);
+
+    await this._readPlatesModel(now);
+    this.perf.record('plate', performance.now() - t0);
+    const n = this.plateTracker.tracks.filter((t) => t.confirmed && t.data.plate).length;
+    const nc = this.plateTracker.confirmedCount;
+    const vc = this.vehicleTracker.confirmedCount;
+    this._setStatus('plate', nc || vc ? 'active' : 'ready',
+      nc ? `${nc} plaka takipte${n ? `, ${n} okundu` : ''}` : vc ? `${vc} araç, plaka aranıyor` : 'Plaka aranıyor');
+  }
+
+  async _readPlatesModel(now) {
+    const s = this.settings;
+    const tracks = this.plateTracker.tracks
+      .filter((t) => t.confirmed && t.misses === 0)
+      .filter((t) => now - (t.data.lastOcrAt || 0) > (t.data.decided ? 1500 : 0))
+      .sort((a, b) => b.box.w - a.box.w)
+      .slice(0, 4);
+    if (!tracks.length) return;
+    const t0 = performance.now();
+    const res = await this.plateOcr.read(tracks.map((t) => ({ source: this.video, box: t.box })));
+    this.perf.record('ocr', performance.now() - t0);
+    const minConf = s.plateMinOcrConf ?? 0.5;
+    for (let i = 0; i < tracks.length; i++) {
+      const t = tracks[i], d = t.data, r = res[i];
+      d.lastOcrAt = now;
+      d.attempts = (d.attempts || 0) + 1;
+      d.lastRaw = r.raw;
+      // Büyük (yakın) plakaların okuması daha güvenilirdir → daha yüksek ağırlık
+      const w = 0.4 + Math.min(1, t.box.w / 160);
+      if (!d.probSum) { d.probSum = new Float32Array(r.probs.length); d.weight = 0; }
+      for (let k = 0; k < r.probs.length; k++) d.probSum[k] += r.probs[k] * w;
+      d.weight += w;
+      d.n = (d.n || 0) + 1;
+      const fused = this.plateOcr.decodeFused(d.probSum, d.weight);
+      d.candidate = fused.plate;
+      d.candidateConf = fused.confidence;
+      d.hint = t.box.w < 60 ? 'plaka uzak' : '';
+      const decided = fused.valid && (
+        (d.n >= (s.plateVotes ?? 2) && fused.confidence >= minConf)
+        || (fused.confidence >= 0.92 && r.confidence >= 0.92));
+      if (decided) {
+        if (!d.thumb || d.plate !== fused.plate) d.thumb = await this._plateThumb(t.box).catch(() => null);
+        this._applyPlateDecision(t, fused.plate, fused.confidence);
+      } else if (!d.decided && !d.unreadable && d.n >= 10) {
+        d.unreadable = true;
+        d.result = PLATE_RESULT.UNREADABLE;
+        this._emitPlate(t, null, 0);
+      }
+    }
+  }
+
+  _plateThumb(box) {
+    const v = this.video;
+    const c = document.createElement('canvas');
+    const scale = Math.min(1, 320 / box.w);
+    c.width = Math.max(8, Math.round(box.w * scale)); c.height = Math.max(4, Math.round(box.h * scale));
+    c.getContext('2d').drawImage(v, box.x, box.y, box.w, box.h, 0, 0, c.width, c.height);
+    return new Promise((resolve) => c.toBlob(resolve, 'image/jpeg', 0.85));
+  }
+
+  _applyPlateDecision(t, plate, confidence) {
+    const d = t.data;
+    const changed = d.plate !== plate;
+    d.plate = plate;
+    d.plateFormatted = formatPlate(plate);
+    d.confidence = confidence;
+    d.decided = true;
+    d.unreadable = false;
+    const vehicle = this.registry.findVehicleByPlate(plate);
+    d.vehicle = vehicle;
+    if (!vehicle) d.result = PLATE_RESULT.NOT_FOUND;
+    else if (vehicle.status === 'unassigned') d.result = PLATE_RESULT.UNASSIGNED;
+    else if (vehicle.status === 'authorized' && !(vehicle.validUntil && new Date(vehicle.validUntil) < new Date())) d.result = PLATE_RESULT.AUTHORIZED;
+    else d.result = PLATE_RESULT.UNAUTHORIZED;
+    if (changed) this._emitPlate(t, vehicle, confidence);
   }
 
   /** YOLO plaka kutularını klasik adaylarla birleştir: model kutusu öncelikli, OCR verisi adaydan alınır */

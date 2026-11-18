@@ -22,35 +22,55 @@ export function distanceToScore(distance) {
   return Math.round(Math.max(0, Math.min(1, s)) * 100);
 }
 
+export function cosine(a, b) {
+  let s = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) { s += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
+  return s / (Math.sqrt(na * nb) || 1);
+}
+
+/** ArcFace kosinüs benzerliğini 0-100 güven skoruna çevirir (0.30 → 0, 0.65 → 100) */
+export function similarityToScore(sim) {
+  return Math.round(Math.max(0, Math.min(1, (sim - 0.3) / 0.35)) * 100);
+}
+
 /**
- * @param {Float32Array|number[]} descriptor canlı görüntüden çıkarılan şablon
- * @param {Array<{id, fullName, employeeNo, status, descriptors:number[][]}>} people
- * @param {{threshold:number, margin:number}} opts
- * @returns {{matched:boolean, person?:object, distance:number, secondDistance:number, reason?:string}}
+ * Canlı şablonu kayıtlı personelle karşılaştırır.
+ *  - 512B (ArcFace) şablonlar kosinüs benzerliği ile, eski 128B şablonlar Öklid mesafesiyle karşılaştırılır;
+ *    farklı türdeki şablonlar birbirine karıştırılmaz.
+ *  - Kişi başına birden çok şablon varsa en iyi iki benzerliğin ortalaması kullanılır (tek şanslı
+ *    eşleşmeye karşı dayanıklı); tek şablon varsa doğrudan o.
+ *
+ * @returns {{matched:boolean, person?:object, score:number, similarity?:number, distance?:number, reason?:string}}
  */
-export function matchFace(descriptor, people, { threshold = 0.45, margin = 0.06 } = {}) {
-  let best = { distance: Infinity, person: null };
-  let second = { distance: Infinity, person: null };
+export function matchFace(descriptor, people, opts = {}) {
+  const D = descriptor.length;
+  const arc = D === 512;
+  const thr = arc ? (opts.simThreshold ?? 0.42) : (opts.threshold ?? 0.45);
+  const margin = arc ? (opts.simMargin ?? 0.07) : (opts.margin ?? 0.06);
+  const scored = [];
   for (const p of people) {
-    if (!p.descriptors?.length) continue;
-    // Kişinin birden fazla şablonu varsa en yakını kullanılır
-    let d = Infinity;
-    for (const t of p.descriptors) d = Math.min(d, euclidean(descriptor, t));
-    if (d < best.distance) {
-      second = best;
-      best = { distance: d, person: p };
-    } else if (d < second.distance) {
-      second = { distance: d, person: p };
+    const tpl = (p.descriptors || []).filter((t) => t.length === D);
+    if (!tpl.length) continue;
+    if (arc) {
+      const sims = tpl.map((t) => cosine(descriptor, t)).sort((a, b) => b - a);
+      const v = sims.length > 1 ? (sims[0] * 0.65 + sims[1] * 0.35) : sims[0];
+      scored.push({ p, v: Math.max(v, sims[0] - 0.03), best: sims[0] });
+    } else {
+      let d = Infinity;
+      for (const t of tpl) d = Math.min(d, euclidean(descriptor, t));
+      scored.push({ p, v: -d, best: -d });
     }
   }
-  if (!best.person) return { matched: false, distance: Infinity, secondDistance: Infinity, reason: 'Kayıtlı şablon yok' };
-  if (best.distance > threshold) {
-    return { matched: false, distance: best.distance, secondDistance: second.distance, reason: 'Kayıtlı kişilerle eşleşmedi' };
-  }
-  if (second.person && second.distance - best.distance < margin) {
-    return { matched: false, distance: best.distance, secondDistance: second.distance, reason: 'Belirsiz eşleşme' };
-  }
-  return { matched: true, person: best.person, distance: best.distance, secondDistance: second.distance };
+  if (!scored.length) return { matched: false, score: 0, reason: 'Kayıtlı şablon yok' };
+  scored.sort((a, b) => b.v - a.v);
+  const [best, second] = scored;
+  const value = arc ? best.v : -best.v;
+  const score = arc ? similarityToScore(value) : distanceToScore(value);
+  const out = arc ? { similarity: value } : { distance: value };
+  const passes = arc ? value >= thr : value <= thr;
+  if (!passes) return { matched: false, score, ...out, reason: 'Kayıtlı kişilerle eşleşmedi' };
+  if (second && Math.abs(best.v - second.v) < margin) return { matched: false, score, ...out, reason: 'Belirsiz eşleşme' };
+  return { matched: true, person: best.p, score, ...out };
 }
 
 /** 68 nokta yüz işaretlerinden yaklaşık önden bakış (frontallik) skoru: 1 = tam önden */

@@ -1,6 +1,7 @@
 {
-  "_aciklama": "İsteğe bağlı YOLO plaka tespit modeli. Model eklemek için ONNX dosyasını bu klasöre koyup 'model' alanına dosya adını yazın (bkz. docs/MODELLER.md).",
-  "model": null,
-  "inputSize": 416,
+  "_aciklama": "Plaka tespit modeli: YOLOv9-t, 384x384, NMS dahili (open-image-models, MIT). Kendi modelinizi eğitirseniz (scripts/train_plate_model.py) bu dosya güncellenir.",
+  "model": "plate-yolov9t-384.onnx",
+  "format": "end2end",
+  "inputSize": 384,
   "classes": { "0": "Plaka" }
 }
