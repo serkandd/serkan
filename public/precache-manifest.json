@@ -1,5 +1,5 @@
 {
- "version": 1794985938568,
+ "version": 1794986861984,
  "files": [
   "css/app.css",
   "icons/icon-192.png",
@@ -23,6 +23,7 @@
   "js/pipeline/analyzer.js",
   "js/pipeline/perf-monitor.js",
   "js/storage/auth.js",
+  "js/storage/backup.js",
   "js/storage/crypto.js",
   "js/storage/db.js",
   "js/storage/repos.js",

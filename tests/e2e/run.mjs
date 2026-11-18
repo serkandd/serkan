@@ -242,6 +242,26 @@ try {
   const vlist2 = await page.$eval('#vehicle-list', (el) => el.innerText);
   check('Araç kaydına sahip ve şirket eklendi', /Serkan Bilge/.test(vlist2) && /Sade Ekonomi/.test(vlist2), vlist2.split('\n').slice(0, 5).join(' | '));
   await page.screenshot({ path: join(out, '07-vehicles.png') });
+
+  // Yedek al → geri yükle: kayıtlar korunur, PIN sorulmaz
+  await page.click('[data-tab=settings]');
+  await page.waitForTimeout(500);
+  const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 30_000 }), page.click('[data-action=backup-export]')]);
+  const backupPath = join(out, 'yedek.json');
+  await dl.saveAs(backupPath);
+  await page.setInputFiles('#backup-file', backupPath);
+  await page.click('dialog[open] button[value=yes]');
+  await page.waitForTimeout(2500);
+  await page.waitForSelector('#app:not([hidden]), #login-form:not([hidden])', { timeout: 180_000 });
+  check('Yedekten geri yükleme sonrası PIN sorulmaz', await page.$eval('#login-form', (el) => el.hidden));
+  await page.waitForSelector('#app:not([hidden])', { timeout: 180_000 });
+  await page.click('[data-tab=vehicles]');
+  await page.waitForTimeout(600);
+  const vlist3 = await page.$eval('#vehicle-list', (el) => el.innerText);
+  check('Yedekten geri yüklenen araç kaydı yerinde', /Serkan Bilge/.test(vlist3) && /34 ABC 123/.test(vlist3));
+  await page.click('[data-tab=personnel]');
+  await page.waitForTimeout(400);
+  check('Yedekten geri yüklenen personel yerinde', /Serkan Bilge/.test(await page.$eval('#personnel-list', (el) => el.innerText)));
   await page.click('[data-tab=live]');
 
   const overflow = await page.evaluate(() => ({ sw: document.body.scrollWidth, w: window.innerWidth, ctl: [...document.querySelectorAll('.controls .ctl')].every((b) => b.getBoundingClientRect().right <= window.innerWidth) }));

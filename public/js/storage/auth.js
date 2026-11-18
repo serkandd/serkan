@@ -202,6 +202,13 @@ export async function verifyOwnPin(pin) {
   }
 }
 
+/** Geri yükleme sonrası: yedekteki yöneticiyle oturumu doğrudan açar */
+export function adoptSession(user, dek) {
+  session.user = publicUser(user);
+  session.dek = dek;
+  touch();
+}
+
 export function logout() {
   session.user = null;
   session.dek = null;

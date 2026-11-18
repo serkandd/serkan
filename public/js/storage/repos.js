@@ -35,6 +35,11 @@ export const DEFAULT_SETTINGS = {
   targetFps: 12,
 };
 
+/* Veri değişikliği bildirimi (otomatik yedek için) */
+let changeListener = null;
+export function onDataChange(fn) { changeListener = fn; }
+function changed() { try { changeListener?.(); } catch { /* yok say */ } }
+
 export async function getSettings() {
   return { ...DEFAULT_SETTINGS, ...((await getMeta('settings')) || {}) };
 }
@@ -43,6 +48,7 @@ export async function saveSettings(patch) {
   requirePermission('settings');
   const s = { ...(await getSettings()), ...patch };
   await setMeta('settings', s);
+  changed();
   await audit('settings.update', 'settings', patch);
   return s;
 }
@@ -152,6 +158,7 @@ export async function savePersonnel(p) {
   const id = p.id || crypto.randomUUID();
   const enc = await encryptJson(currentDek(), rec);
   await db.put('personnel', { id, enc, updatedAt: Date.now() });
+  changed();
   await audit(isNew ? 'personnel.create' : 'personnel.update', id, {
     employeeNo: rec.employeeNo, status: rec.status, templates: rec.descriptors.length,
   });
@@ -162,6 +169,7 @@ export async function savePersonnel(p) {
 export async function deletePersonnel(id) {
   requirePermission('personnel');
   const p = personnel().find((x) => x.id === id);
+  changed();
   await db.delete('personnel', id);
   await audit('personnel.delete', id, { employeeNo: p?.employeeNo });
   await loadPersonnel();
@@ -266,6 +274,7 @@ export async function saveVehicle(v) {
   // Kullanıcının kaydettiği değerler artık "otomatik tahmin" değildir
   const rec = vehicleRecord({ ...v, plateKey: key, aliases: [...aliases], autoFields: {} }, prevRec);
   const id = v.id || crypto.randomUUID();
+  changed();
   await writeVehicle(id, rec);
   await audit(prev ? 'vehicle.update' : 'vehicle.create', id, {
     plate: rec.plate, status: rec.status, ...(prev && prev.plateKey !== key ? { correctedFrom: prev.plate } : {}),
@@ -293,6 +302,7 @@ export async function autoAddVehicle(info) {
   });
   rec.createdBy = 'sistem';
   const id = crypto.randomUUID();
+  changed();
   await writeVehicle(id, rec);
   await audit('vehicle.auto_create', id, { plate: rec.plate, color: rec.color, type: rec.vehicleType });
   await loadVehicles();
@@ -336,6 +346,7 @@ export async function applyVehicleAttributes(id, a) {
   if (a.brand && (!rec.brand || rec.brand === a.brand)) fill('model', a.model);
   fill('vehicleType', a.type);
   fill('color', a.color);
+  changed();
   rec.attrs = {
     guess: a.guess, brandConf: +a.brandConf.toFixed(3), modelConf: +a.modelConf.toFixed(3),
     typeConf: +a.typeConf.toFixed(3), colorConf: +a.colorConf.toFixed(3), at: Date.now(),
@@ -348,6 +359,7 @@ export async function applyVehicleAttributes(id, a) {
 export async function deleteVehicle(id) {
   requirePermission('vehicles');
   const v = vehicles().find((x) => x.id === id);
+  changed();
   await db.delete('vehicles', id);
   await audit('vehicle.delete', id, { plate: v?.plate });
   await loadVehicles();
@@ -426,34 +438,4 @@ export async function purgeAllEvents() {
   requirePermission('settings');
   await db.clear('events');
   await audit('events.purge_all', 'events', {});
-}
-
-/** Tüm verileri şifreli olarak dışa aktarır (yedek / başka cihaza taşıma). Şifre çözülmez. */
-export async function exportEncryptedBackup() {
-  requirePermission('export');
-  const dump = {
-    format: 'guvenlik-asistani-backup', version: 1, exportedAt: Date.now(),
-    users: await db.getAll('users'),
-    personnel: await db.getAll('personnel'),
-    vehicles: await db.getAll('vehicles'),
-    // Cihaza özel anahtarlar yedeğe girmez (başka cihazda işe yaramaz, dışa aktarılamaz)
-    meta: (await db.getAll('meta')).filter((m) => !m.key.startsWith('loginFail:') && !['deviceKey', 'autoLogin'].includes(m.key)),
-  };
-  await audit('backup.export', 'all', { personnel: dump.personnel.length, vehicles: dump.vehicles.length });
-  return new Blob([JSON.stringify(dump)], { type: 'application/json' });
-}
-
-export async function importEncryptedBackup(file) {
-  requirePermission('export');
-  const dump = JSON.parse(await file.text());
-  if (dump.format !== 'guvenlik-asistani-backup') throw new Error('Geçersiz yedek dosyası');
-  // Yedek farklı bir veri anahtarıyla şifrelenmiş olabilir: mevcut olay/işlem kayıtları
-  // bu anahtarla okunamaz hale geleceğinden temizlenir, hash zinciri yeniden başlar.
-  for (const store of ['users', 'personnel', 'vehicles', 'meta', 'events', 'audit']) {
-    await db.clear(store);
-    for (const row of dump[store] || []) {
-      if (store === 'meta' && row.key === 'auditHead') continue;
-      await db.put(store, row);
-    }
-  }
 }

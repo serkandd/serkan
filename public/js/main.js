@@ -5,6 +5,7 @@ import { $, $$, esc, toast, fmtTime, formData, fillForm, confirmBox, passwordBox
 import { requestPersistence, storageEstimate } from './storage/db.js';
 import * as auth from './storage/auth.js';
 import * as repo from './storage/repos.js';
+import * as backup from './storage/backup.js';
 import { CameraManager } from './camera/camera.js';
 import { FaceEngine } from './detection/face-engine.js';
 import { YoloDetector, COCO_VEHICLE_CLASSES, runtimeInfo, setComputePreference } from './detection/yolo-detector.js';
@@ -112,6 +113,7 @@ async function showAuth({ allowAuto = true } = {}) {
       if (!(await auth.isSetupDone())) {
         await auth.setupAdmin(null);
         await repo.audit('system.setup', 'admin', { auth: 'device' });
+        state.freshInstall = true;
         await afterLogin();
         return;
       }
@@ -211,6 +213,7 @@ $('#login-form').addEventListener('submit', async (e) => {
 
 async function afterLogin() {
   state.autoLogin = await auth.isAutoLoginEnabled();
+  repo.onDataChange(() => backup.scheduleBackup());
   state.alerts.unlock();
   state.settings = await repo.getSettings();
   await repo.loadPersonnel();
@@ -232,6 +235,15 @@ async function afterLogin() {
   renderAll();
   switchTab('live');
   state.adminUnlockedAt = Date.now();
+  // Yeni kurulumda (uygulama silinip yeniden yüklendiyse) eski yedeği geri yüklemeyi öner
+  if (state.freshInstall && IS_NATIVE_APP) {
+    state.freshInstall = false;
+    $('#restore-path').textContent = backup.BACKUP_LOCATION;
+    $('#restore-dialog').showModal();
+    return; // kamera, kullanıcı karar verince açılır
+  }
+  // Açılışta güncel bir yedek de yazılır
+  backup.scheduleBackup(8000);
   // Android uygulamasında girişten sonra kamera doğrudan açılır
   if (IS_NATIVE_APP && !state.camera?.isRunning) startCamera();
 }
@@ -393,6 +405,7 @@ async function loadModels() {
   state.overlay = new Overlay($('#overlay'), $('#video'), state.analyzer);
   window.__analyzer = state.analyzer; // tanılama / uçtan uca testler için
   window.__app = state;
+  window.__backupStatus = backup.backupStatus;
   wireAnalyzer();
   wireCamera();
 }
@@ -1343,6 +1356,7 @@ $('#pin-required').addEventListener('change', async (e) => {
       toast('Bu telefonda PIN sorulmayacak.', 'ok');
     }
     state.autoLogin = await auth.isAutoLoginEnabled();
+  repo.onDataChange(() => backup.scheduleBackup());
   } catch (ex) {
     e.target.checked = !e.target.checked;
     toast(ex.message, 'error');
@@ -1388,20 +1402,51 @@ $('[data-action=audit-verify]').addEventListener('click', async () => {
 
 $('[data-action=backup-export]').addEventListener('click', async () => {
   if (!(await ensureAdminFresh())) return;
-  const blob = await repo.exportEncryptedBackup();
-  download(blob, `guvenlik-yedek-${new Date().toISOString().slice(0, 10)}.json`);
+  try {
+    if (backup.autoBackupAvailable()) {
+      const r = await backup.writeBackupToDevice();
+      toast(`Yedek kaydedildi: ${backup.BACKUP_LOCATION} (${Math.round(r.bytes / 1024)} KB)`, 'ok', 6000);
+    } else {
+      const text = await backup.buildBackup();
+      download(new Blob([text], { type: 'application/json' }), `guvenlik-yedek-${new Date().toISOString().slice(0, 10)}.json`);
+    }
+    await repo.audit('backup.export', 'all', {});
+    renderDiag();
+  } catch (ex) { toast(`Yedek alınamadı: ${ex.message}`, 'error', 7000); }
 });
+
+/** Yedek dosyasından geri yükler; başarılıysa uygulama yeniden açılır (PIN sorulmaz) */
+async function restoreFromFile(file, { confirm = true } = {}) {
+  if (confirm && !(await confirmBox('Bu telefondaki kayıtlar silinip yedekteki kayıtlar yüklenecek. Devam edilsin mi?', 'Geri yükle'))) return;
+  try {
+    stopCamera();
+    const r = await backup.restoreBackup(file);
+    toast(`Geri yüklendi: ${r.personnel} personel, ${r.vehicles} araç. Uygulama yeniden açılıyor…`, 'ok', 4000);
+    setTimeout(() => (r.autoLogin ? location.reload() : lock()), 1500);
+  } catch (ex) {
+    toast(`Geri yüklenemedi: ${ex.message}`, 'error', 8000);
+  }
+}
 
 $('#backup-file').addEventListener('change', async (e) => {
   const file = e.target.files[0];
   e.target.value = '';
   if (!file || !(await ensureAdminFresh())) return;
-  if (!(await confirmBox('Mevcut tüm kayıtlar silinip yedekteki kayıtlar yüklenecek. Yedekteki kullanıcı parolalarıyla yeniden giriş yapmanız gerekecek. Devam edilsin mi?', 'Geri yükle'))) return;
-  try {
-    await repo.importEncryptedBackup(file);
-    toast('Yedek yüklendi. Lütfen yeniden giriş yapın.', 'ok');
-    lock();
-  } catch (ex) { toast(ex.message, 'error'); }
+  await restoreFromFile(file);
+});
+
+// Yeni kurulum: eski verileri geri yükleme önerisi
+$('#restore-file').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  $('#restore-dialog').close();
+  await restoreFromFile(file, { confirm: false });
+});
+$('#restore-skip').addEventListener('click', () => $('#restore-dialog').close());
+$('#restore-dialog').addEventListener('close', () => {
+  backup.scheduleBackup(8000);
+  if (IS_NATIVE_APP && !state.camera?.isRunning) startCamera();
 });
 
 $('[data-action=retention-run]').addEventListener('click', async () => {
@@ -1443,6 +1488,9 @@ async function renderDiag() {
     ['TF.js tensör', tfm ? `${tfm.numTensors} tensör · ${(tfm.numBytes / 1048576).toFixed(1)} MB` : '—'],
     ['Depolama', est ? `${(est.usage / 1048576).toFixed(1)} MB / ${(est.quota / 1048576).toFixed(0)} MB${persisted ? ' · kalıcı' : ''}` : '—'],
     ['Kayıtlar', `${repo.personnel().length} personel · ${repo.vehicles().length} araç`],
+    ['Otomatik yedek', backup.autoBackupAvailable()
+      ? (backup.backupStatus() ? (backup.backupStatus().ok ? `${fmtTime(backup.backupStatus().at)} · ${backup.BACKUP_LOCATION}` : `HATA: ${backup.backupStatus().error}`) : `açık · ${backup.BACKUP_LOCATION}`)
+      : 'yalnızca Android uygulamasında'],
   ];
   $('#diag').innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
   let pref = 'cpu';

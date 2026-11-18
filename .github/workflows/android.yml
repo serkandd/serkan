@@ -3,7 +3,7 @@ name: Android APK
 on:
   push:
     branches: ["claude/realtime-ai-security-system-m6z08v"]
-    paths: ["public/**", "capacitor.config.json", "scripts/android-patch.mjs", "scripts/ci/**", ".github/workflows/android.yml"]
+    paths: ["public/**", "capacitor.config.json", "scripts/android-patch.mjs", "scripts/ci/**", "android-signing/**", ".github/workflows/android.yml"]
   workflow_dispatch:
 
 permissions:
@@ -26,10 +26,15 @@ jobs:
 
       - name: Capacitor kurulumu
         run: |
-          npm install --no-save --ignore-scripts @capacitor/core@8.6.2 @capacitor/cli@8.6.2 @capacitor/android@8.6.2
+          npm install --no-save --ignore-scripts @capacitor/core@8.6.2 @capacitor/cli@8.6.2 @capacitor/android@8.6.2 @capacitor/filesystem@8.1.5
           npx cap add android
           node scripts/android-patch.mjs
           npx cap sync android
+
+      - name: Sabit imza anahtarı (yeni sürüm eskisinin üzerine kurulabilsin, veriler korunsun)
+        run: |
+          mkdir -p ~/.android
+          cp android-signing/debug.keystore ~/.android/debug.keystore
 
       - name: APK derle
         working-directory: android

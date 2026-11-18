@@ -68,6 +68,10 @@ const t0 = Date.now();
 await waitFor(`!document.querySelector('#app').hidden || !!document.querySelector('#login-form:not([hidden])')`, 120_000);
 console.log('Giriş ekranı:', await evaluate(`document.querySelector('#auth').hidden ? 'yok (doğrudan açıldı)' : 'göründü'`));
 const opened = await waitFor(`!document.querySelector('#app').hidden`, 300_000);
+// Yeni kurulumda çıkan "eski kayıtlarınız var mı" penceresini kapat (yeni başla)
+await waitFor(`!!document.querySelector('#restore-dialog[open]')`, 15_000);
+console.log('Geri yükleme önerisi:', await evaluate(`document.querySelector('#restore-dialog').open ? 'gösterildi' : 'yok'`));
+await evaluate(`document.querySelector('#restore-skip')?.click(), true`);
 console.log(opened ? `Uygulama açıldı: ${((Date.now() - t0) / 1000).toFixed(1)} sn` : 'UYGULAMA AÇILMADI (300 sn)');
 console.log('Açılış ekranı:', await evaluate(`document.querySelector('#boot').innerText`));
 await sleep(20_000);
@@ -76,6 +80,10 @@ console.log('Durum:', await evaluate(`[...document.querySelectorAll('.chip')].ma
 console.log('İzolasyon:', await evaluate('self.crossOriginIsolated'), 'Çekirdek:', await evaluate('navigator.hardwareConcurrency'));
 const shot = await cdp('Page.captureScreenshot', { format: 'png' });
 if (shot.result?.data) writeFileSync('webview.png', Buffer.from(shot.result.data, 'base64'));
+// Otomatik yedeğin yazılmasını bekle
+await waitFor(`(() => { const d = [...document.querySelectorAll('#diag dt')]; return true; })()`, 1000);
+await sleep(15_000);
+console.log('Yedek durumu:', await evaluate(`JSON.stringify((window.__backupStatus && window.__backupStatus()) || null)`));
 console.log('--- Konsol ---');
 for (const l of logs) console.log(l);
 ws.close();

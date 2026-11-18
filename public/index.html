@@ -194,9 +194,10 @@
 
         <section class="card stack" data-admin>
           <h3>Veri Yönetimi</h3>
+          <p class="muted tiny">Android uygulamasında kayıtlar her değişiklikten sonra telefonun <b>Belgeler/GuvenlikAsistani</b> klasörüne otomatik yedeklenir. Bu klasör uygulama silinse de kalır. Yeniden kurulumda açılan pencereden veya buradan "Yedekten geri yükle" ile geri getirin. Yedek dosyasını başkalarıyla paylaşmayın.</p>
           <div class="row wrap">
-            <button class="btn" type="button" data-action="backup-export">Şifreli yedek al</button>
-            <label class="btn">Yedekten geri yükle<input type="file" id="backup-file" accept="application/json" hidden></label>
+            <button class="btn" type="button" data-action="backup-export">Şimdi yedekle</button>
+            <label class="btn">Yedekten geri yükle<input type="file" id="backup-file" accept="application/json,.json,*/*" hidden></label>
             <button class="btn" type="button" data-action="retention-run">Saklama politikasını uygula</button>
             <button class="btn danger" type="button" data-action="events-purge">Tüm olayları sil</button>
           </div>
@@ -323,6 +324,20 @@
         <button class="btn primary" type="submit" id="qe-save">Kaydet</button>
       </div>
     </form>
+  </dialog>
+
+  <!-- Yeni kurulumda yedekten geri yükleme -->
+  <dialog id="restore-dialog" class="sheet">
+    <div class="stack">
+      <h2>Eski kayıtlarınız var mı?</h2>
+      <p>Uygulama daha önce bu telefonda kullanıldıysa kayıtlarınız otomatik olarak yedeklenmişti:</p>
+      <p class="mono tiny" id="restore-path"></p>
+      <p class="muted tiny">"Yedeği seç"e dokunun, açılan dosya penceresinde <b>Belgeler → GuvenlikAsistani → guvenlik-yedek.json</b> dosyasını seçin. Personel, yüz kayıtları ve araçlar geri gelir.</p>
+      <div class="row end">
+        <button class="btn" type="button" id="restore-skip">Yeni başla</button>
+        <label class="btn primary">Yedeği seç<input type="file" id="restore-file" accept="application/json,.json,*/*" hidden></label>
+      </div>
+    </div>
   </dialog>
 
   <div id="toasts" class="toasts" aria-live="polite"></div>
