@@ -13,4 +13,6 @@ echo "--- Uygulama SİLİNDİKTEN sonra yedek hâlâ yerinde mi?"
 adb shell ls -la /sdcard/Documents/GuvenlikAsistani/ || true
 echo "--- Aynı imzayla güncelleme (silmeden üzerine kurulum) testi"
 adb install GuvenlikAsistani.apk && adb install -r GuvenlikAsistani.apk && echo "UZERINE KURULUM BASARILI" || true
-adb logcat -d | grep -iE "Capacitor|chromium|tesseract|AndroidRuntime" | tail -200 || true
+echo "--- Çöküş tanılama (renderer / bellek / grafik)"
+adb logcat -d | grep -iE "RenderProcessGone|renderer|lowmemorykiller|lmkd|Out of memory|OOM|FATAL|signal 11|SIGSEGV|crash|Killing .*guvenlik|isolated not needed|ColorBuffer|onTrimMemory" | grep -v "won't be persisted" | tail -80 || true
+adb logcat -d -b crash | tail -60 || true
