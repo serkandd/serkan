@@ -385,7 +385,7 @@ async function loadModels() {
   state.vehicleAttrs = new VehicleAttributeClassifier();
   state.models.vehicleMake = 'yükleniyor…';
   withTimeout(state.vehicleAttrs.load(), 180_000, 'Araç özellik modeli')
-    .then(() => { state.models.vehicleMake = 'hazır (CLIP, marka/model/tür/renk tahmini)'; })
+    .then(() => { state.models.vehicleMake = 'hazır (CLIP, gerektiğinde yüklenir)'; })
     .catch((e) => { console.error(e); state.models.vehicleMake = `yüklenemedi: ${e.message}`; });
 
   state.plateWorker = new Worker(new URL('./workers/plate-worker.js', import.meta.url), { type: 'module' });

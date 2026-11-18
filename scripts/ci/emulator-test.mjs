@@ -90,6 +90,11 @@ await sleep(15_000);
 console.log('Yedek durumu:', await evaluate(`JSON.stringify((window.__backupStatus && window.__backupStatus()) || null)`));
 console.log('Capacitor:', await evaluate(`JSON.stringify({ native: window.Capacitor?.isNativePlatform?.(), fsAvail: window.Capacitor?.isPluginAvailable?.('Filesystem'), plugins: Object.keys(window.Capacitor?.Plugins || {}), backupAvail: window.__backup?.autoBackupAvailable() })`));
 console.log('Elle yedek:', await evaluate(`window.__backup.writeBackupToDevice().then((r) => 'OK ' + JSON.stringify(r), (e) => 'HATA ' + (e?.message || e) + ' ' + JSON.stringify(e))`));
+// Dayanıklılık: uygulama 90 sn boyunca çökmeden çalışmaya devam etmeli
+for (let i = 1; i <= 3; i++) {
+  await sleep(30_000);
+  console.log(`Dayanıklılık ${i * 30} sn:`, await evaluate(`JSON.stringify({ calisiyor: true, kamera: !!window.__app?.camera?.isRunning, yuzFps: Math.round(window.__analyzer?.perf.get('face')?.fpsEma || 0), bellekMB: performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null, clip: window.__app?.vehicleAttrs?.loaded })`));
+}
 console.log('--- Konsol ---');
 for (const l of logs) console.log(l);
 ws.close();

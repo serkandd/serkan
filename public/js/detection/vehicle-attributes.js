@@ -8,29 +8,64 @@
  */
 export const ATTR_THRESHOLDS = { brand: 0.55, model: 0.4, type: 0.5, color: 0.45 };
 
+/**
+ * Model büyük (≈90 MB) olduğundan sürekli bellekte tutulmaz: ilk tahminde yüklenir, bir süre
+ * kullanılmazsa worker kapatılarak bellek serbest bırakılır (düşük bellekli telefonlarda kapanmayı önler).
+ */
 export class VehicleAttributeClassifier {
-  constructor() {
-    this.ready = false;
+  constructor({ idleMs = 45_000 } = {}) {
+    this.ready = true; // gerektiğinde yüklenir
+    this.loaded = false;
+    this.idleMs = idleMs;
     this._id = 0;
     this._pending = new Map();
     this._queue = Promise.resolve();
+    this._worker = null;
+    this._loading = null;
+    this._idleTimer = null;
   }
 
-  load() {
-    this.worker = new Worker(new URL('../workers/clip-worker.js', import.meta.url), { type: 'module' });
-    return new Promise((resolve, reject) => {
-      this.worker.onmessage = (ev) => {
+  /** Uyumluluk: açılışta yalnızca dosyaların varlığını doğrular, modeli yüklemez */
+  async load() {
+    const r = await fetch(new URL('../../models/vehicle-clip/labels.json', import.meta.url).href, { method: 'HEAD' });
+    if (!r.ok) throw new Error('Araç özellik modeli bulunamadı');
+    return true;
+  }
+
+  _ensureWorker() {
+    if (this._worker) return this._loading;
+    this._worker = new Worker(new URL('../workers/clip-worker.js', import.meta.url), { type: 'module' });
+    this._loading = new Promise((resolve, reject) => {
+      this._worker.onmessage = (ev) => {
         const m = ev.data;
-        if (m.type === 'ready') { this.ready = true; resolve(true); return; }
+        if (m.type === 'ready') { this.loaded = true; resolve(); return; }
         const p = this._pending.get(m.id);
         if (m.type === 'error' && !p) { reject(new Error(m.message)); return; }
         if (!p) return;
         this._pending.delete(m.id);
         if (m.type === 'error') p.reject(new Error(m.message)); else p.resolve(m.groups);
       };
-      this.worker.onerror = (e) => reject(new Error(e.message || 'Araç özellik modeli yüklenemedi'));
-      this.worker.postMessage({ type: 'init' });
+      this._worker.onerror = (e) => reject(new Error(e.message || 'Araç özellik modeli yüklenemedi'));
+      this._worker.postMessage({ type: 'init' });
     });
+    this._loading.catch(() => this.unload());
+    return this._loading;
+  }
+
+  /** Worker'ı kapatır ve modeli bellekten atar */
+  unload() {
+    clearTimeout(this._idleTimer);
+    try { this._worker?.terminate(); } catch { /* yok say */ }
+    this._worker = null;
+    this._loading = null;
+    this.loaded = false;
+    for (const p of this._pending.values()) p.reject(new Error('Model kapatıldı'));
+    this._pending.clear();
+  }
+
+  _armIdle() {
+    clearTimeout(this._idleTimer);
+    this._idleTimer = setTimeout(() => this.unload(), this.idleMs);
   }
 
   /** Aracı kırpmadan kare tuvale yerleştirir (kenar boşluğu gri) ve 224×224 RGBA üretir */
@@ -48,18 +83,23 @@ export class VehicleAttributeClassifier {
     return ctx.getImageData(0, 0, 224, 224).data;
   }
 
-  /** @returns {Promise<{brand,model,type,color,brandConf,modelConf,typeConf,colorConf,top}>} */
+  /** @returns {Promise<{brand,model,type,color,brandConf,modelConf,typeConf,colorConf,guess}>} */
   classify(source) {
-    if (!this.ready) return Promise.resolve(null);
     const rgba = this._toInput(source);
-    const run = () => new Promise((resolve, reject) => {
-      const id = ++this._id;
-      this._pending.set(id, { resolve, reject });
-      this.worker.postMessage({ type: 'classify', id, rgba }, [rgba.buffer]);
-      setTimeout(() => {
-        if (this._pending.has(id)) { this._pending.delete(id); reject(new Error('Araç özellik tahmini zaman aşımı')); }
-      }, 30_000);
-    });
+    const run = async () => {
+      clearTimeout(this._idleTimer);
+      await this._ensureWorker();
+      const groups = await new Promise((resolve, reject) => {
+        const id = ++this._id;
+        this._pending.set(id, { resolve, reject });
+        this._worker.postMessage({ type: 'classify', id, rgba }, [rgba.buffer]);
+        setTimeout(() => {
+          if (this._pending.has(id)) { this._pending.delete(id); reject(new Error('Araç özellik tahmini zaman aşımı')); }
+        }, 60_000);
+      });
+      this._armIdle();
+      return groups;
+    };
     const job = this._queue.then(run);
     this._queue = job.catch(() => {});
     return job.then((g) => interpret(g));
