@@ -26,10 +26,13 @@ jobs:
 
       - name: Capacitor kurulumu
         run: |
-          npm install --no-save --ignore-scripts @capacitor/core@8.6.2 @capacitor/cli@8.6.2 @capacitor/android@8.6.2 @capacitor/filesystem@8.1.5
+          # Capacitor yerel eklentileri yalnızca package.json bağımlılıklarında listelenirse APK'ya alır
+          npm pkg set dependencies.@capacitor/core=8.6.2 dependencies.@capacitor/android=8.6.2 dependencies.@capacitor/filesystem=8.1.5
+          npm install --ignore-scripts @capacitor/core@8.6.2 @capacitor/cli@8.6.2 @capacitor/android@8.6.2 @capacitor/filesystem@8.1.5
           npx cap add android
           node scripts/android-patch.mjs
           npx cap sync android
+          grep -q "capacitor-filesystem" android/capacitor.settings.gradle && echo "Filesystem eklentisi dahil edildi" || (echo "HATA: Filesystem eklentisi APK'ya dahil edilmedi" && exit 1)
 
       - name: Sabit imza anahtarı (yeni sürüm eskisinin üzerine kurulabilsin, veriler korunsun)
         run: |
