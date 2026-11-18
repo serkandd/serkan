@@ -105,7 +105,24 @@ function updateNetStatus() {
 
 /* ============================================================ OTURUM */
 
-async function showAuth() {
+async function showAuth({ allowAuto = true } = {}) {
+  // PIN'siz kullanım: ilk açılışta kurulum kendiliğinden yapılır, sonraki açılışlarda doğrudan girilir
+  if (allowAuto) {
+    try {
+      if (!(await auth.isSetupDone())) {
+        await auth.setupAdmin(null);
+        await repo.audit('system.setup', 'admin', { auth: 'device' });
+        await afterLogin();
+        return;
+      }
+      if (await auth.tryAutoLogin()) {
+        await afterLogin();
+        return;
+      }
+    } catch (e) {
+      console.error('Otomatik giriş yapılamadı', e);
+    }
+  }
   $('#boot').hidden = true;
   $('#app').hidden = true;
   $('#auth').hidden = false;
@@ -177,6 +194,11 @@ $('#login-form').addEventListener('submit', async (e) => {
     await auth.login(f.password);
     await repo.audit('auth.login', auth.currentUser().id, {});
     e.target.reset();
+    // Kullanıcı isteği: bir kez girildikten sonra bu cihazda bir daha PIN sorulmaz (Ayarlar'dan açılabilir)
+    if (auth.currentUser().role === 'admin' && !(await auth.isAutoLoginEnabled()) && !(() => { try { return localStorage.getItem('ga.pinRequired'); } catch { return null; } })()) {
+      await auth.enableAutoLogin();
+      toast('Bundan sonra bu telefonda PIN sorulmayacak. İsterseniz Ayarlar → Giriş bölümünden açabilirsiniz.', 'ok', 7000);
+    }
     await afterLogin();
   } catch (ex) {
     err.textContent = ex.message;
@@ -188,6 +210,7 @@ $('#login-form').addEventListener('submit', async (e) => {
 });
 
 async function afterLogin() {
+  state.autoLogin = await auth.isAutoLoginEnabled();
   state.alerts.unlock();
   state.settings = await repo.getSettings();
   await repo.loadPersonnel();
@@ -214,6 +237,7 @@ async function afterLogin() {
 }
 
 async function lock(reason = '') {
+  if (await auth.isAutoLoginEnabled()) return; // PIN'siz kullanımda kilit yok
   stopCamera();
   if (auth.isLoggedIn()) await repo.audit('auth.logout', auth.currentUser().id, { reason });
   auth.logout();
@@ -223,6 +247,7 @@ async function lock(reason = '') {
 }
 
 $('#user-chip').addEventListener('click', async () => {
+  if (await auth.isAutoLoginEnabled()) { switchTab('settings'); return; }
   if (await confirmBox('Oturum kapatılsın mı? Canlı analiz durdurulacak.', 'Oturumu kapat')) lock();
 });
 
@@ -241,6 +266,7 @@ for (const ev of ['pointerdown', 'keydown', 'touchstart']) {
 setInterval(() => {
   if (!auth.isLoggedIn()) return;
   const limit = (state.settings.autoLockMinutes || 5) * 60_000;
+  if (state.autoLogin) return;
   if (auth.idleMs() > limit) {
     if (!state.camera?.isRunning) lock('Hareketsizlik nedeniyle oturum kilitlendi.');
     else if (['personnel', 'vehicles', 'settings'].includes(state.tab)) switchTab('live');
@@ -248,6 +274,7 @@ setInterval(() => {
 }, 15_000);
 
 async function ensureAdminFresh() {
+  if (await auth.isAutoLoginEnabled()) return true;
   const limit = (state.settings.autoLockMinutes || 5) * 60_000;
   if (Date.now() - state.adminUnlockedAt < limit && auth.idleMs() < limit) return true;
   const pw = await passwordBox('Yönetim ekranı için PIN\'inizi tekrar girin.');
@@ -1219,6 +1246,8 @@ const SETTINGS_SCHEMA = [
 ];
 
 async function renderSettings() {
+  $('#pin-required').checked = !(await auth.isAutoLoginEnabled());
+  $('#pin-card').hidden = auth.currentUser()?.role !== 'admin';
   const form = $('#settings-form');
   const s = state.settings;
   const isAdmin = auth.can('settings');
@@ -1300,6 +1329,24 @@ $('#user-form').addEventListener('submit', async (e) => {
     renderUsers();
     toast('Kullanıcı eklendi.', 'ok');
   } catch (ex) { toast(ex.message, 'error'); }
+});
+
+$('#pin-required').addEventListener('change', async (e) => {
+  try {
+    if (e.target.checked) {
+      await auth.disableAutoLogin();
+      try { localStorage.setItem('ga.pinRequired', '1'); } catch { /* yok say */ }
+      toast('Uygulama açılışında PIN sorulacak.', 'ok');
+    } else {
+      await auth.enableAutoLogin();
+      try { localStorage.removeItem('ga.pinRequired'); } catch { /* yok say */ }
+      toast('Bu telefonda PIN sorulmayacak.', 'ok');
+    }
+    state.autoLogin = await auth.isAutoLoginEnabled();
+  } catch (ex) {
+    e.target.checked = !e.target.checked;
+    toast(ex.message, 'error');
+  }
 });
 
 $('#password-form').addEventListener('submit', async (e) => {

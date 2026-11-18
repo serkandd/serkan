@@ -179,9 +179,14 @@
         </section>
 
         <section class="card stack">
-          <h3>PIN Değiştir</h3>
+          <h3>Giriş</h3>
+          <div id="pin-card" class="stack">
+            <label class="check"><input type="checkbox" id="pin-required"> Uygulama açılırken PIN sor</label>
+            <p class="muted tiny">Kapalıyken uygulama bu telefonda doğrudan açılır; kayıtlar yine şifreli saklanır ama telefonu açan herkes uygulamaya girebilir. Telefonun ekran kilidini açık tutun. PIN sormayı açmak için önce aşağıdan bir PIN belirleyin.</p>
+          </div>
+          <h3>PIN Belirle / Değiştir</h3>
           <form id="password-form" class="grid2">
-            <input name="old" type="password" placeholder="Mevcut PIN / parola" required autocomplete="current-password">
+            <input name="old" type="password" placeholder="Mevcut PIN (yoksa boş bırakın)" autocomplete="current-password">
             <input name="new" type="password" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" placeholder="Yeni 4 haneli PIN" required autocomplete="new-password">
             <button class="btn" type="submit">Değiştir</button>
           </form>

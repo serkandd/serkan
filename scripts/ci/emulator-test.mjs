@@ -64,12 +64,9 @@ const waitFor = async (expr, ms) => {
 
 console.log('UA:', await evaluate('navigator.userAgent'));
 const t0 = Date.now();
-await waitFor(`!!document.querySelector('#setup-form:not([hidden]), #login-form:not([hidden])')`, 60_000);
-if (await evaluate(`!!document.querySelector('#setup-form:not([hidden])')`)) {
-  await evaluate(`(() => { const f = document.querySelector('#setup-form');
-    f.password.value = '2468'; f.password2.value = '2468';
-    f.requestSubmit(); return true; })()`);
-}
+// PIN'siz kullanım: uygulama giriş ekranı olmadan açılmalı
+await waitFor(`!document.querySelector('#app').hidden || !!document.querySelector('#login-form:not([hidden])')`, 120_000);
+console.log('Giriş ekranı:', await evaluate(`document.querySelector('#auth').hidden ? 'yok (doğrudan açıldı)' : 'göründü'`));
 const opened = await waitFor(`!document.querySelector('#app').hidden`, 300_000);
 console.log(opened ? `Uygulama açıldı: ${((Date.now() - t0) / 1000).toFixed(1)} sn` : 'UYGULAMA AÇILMADI (300 sn)');
 console.log('Açılış ekranı:', await evaluate(`document.querySelector('#boot').innerText`));

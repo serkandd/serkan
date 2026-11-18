@@ -26,8 +26,8 @@ görüntü analiz uygulaması. Telefon kamerasından gelen canlı görüntüyü 
 
 1. Linki Samsung telefonda açın, APK iner.
 2. İndirilen dosyaya dokunun. "Bilinmeyen kaynaklardan yükleme" izni sorulursa *Ayarlar → Bu kaynaktan izin ver*.
-3. *Yükle* → *Aç*. İlk açılışta 4 haneli PIN belirleyin ve kamera iznine bir kez *İzin ver* deyin.
-4. Sonraki açılışlarda yalnızca PIN girilir; kamera doğrudan açılır ve analiz başlar.
+3. *Yükle* → *Aç*. Kamera iznine bir kez *İzin ver* deyin.
+4. Uygulama PIN veya şifre sormadan açılır; kamera doğrudan başlar. İsterseniz Ayarlar → Giriş'ten PIN sormayı açabilirsiniz.
 
 **Yüz kaydı:** Kamerada yüz görülünce *Yüzümü kaydet* düğmesine basın; görüntü dondurulur, ad soyad yazıp kaydedin.
 **Araçlar:** Okunan her yeni plaka araç fotoğrafı, rengi ve türüyle *Araçlar* listesine otomatik eklenir ("Bilgi bekliyor").

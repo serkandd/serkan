@@ -436,7 +436,8 @@ export async function exportEncryptedBackup() {
     users: await db.getAll('users'),
     personnel: await db.getAll('personnel'),
     vehicles: await db.getAll('vehicles'),
-    meta: (await db.getAll('meta')).filter((m) => !m.key.startsWith('loginFail:')),
+    // Cihaza özel anahtarlar yedeğe girmez (başka cihazda işe yaramaz, dışa aktarılamaz)
+    meta: (await db.getAll('meta')).filter((m) => !m.key.startsWith('loginFail:') && !['deviceKey', 'autoLogin'].includes(m.key)),
   };
   await audit('backup.export', 'all', { personnel: dump.personnel.length, vehicles: dump.vehicles.length });
   return new Blob([JSON.stringify(dump)], { type: 'application/json' });

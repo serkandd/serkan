@@ -85,15 +85,13 @@ page.on('console', (m) => { if (m.type() === 'error') errors.push(`console: ${m.
 
 try {
   await page.goto(`http://localhost:${PORT}/`);
-  await page.waitForSelector('#setup-form:not([hidden])', { timeout: 60_000 });
+  const tLoad = Date.now();
+  // PIN'siz kullanım: ilk açılışta kurulum kendiliğinden yapılır, giriş ekranı çıkmaz
+  await page.waitForSelector('#app:not([hidden]), #setup-form:not([hidden]), #login-form:not([hidden])', { timeout: 180_000 });
+  check('Uygulama PIN sormadan açılır', await page.$eval('#auth', (el) => el.hidden));
+  await page.waitForSelector('#app:not([hidden])', { timeout: 180_000 });
   const coi = await page.evaluate(() => self.crossOriginIsolated);
   check('Service worker ile cross-origin isolation', coi);
-
-  const tLoad = Date.now();
-  // 4 haneli PIN: ikinci alan dolunca form kendiliğinden gönderilir
-  await page.type('#setup-form [name=password]', '2468');
-  await page.type('#setup-form [name=password2]', '2468');
-  await page.waitForSelector('#app:not([hidden])', { timeout: 180_000 });
   check('Kurulum + model yükleme', true, `${((Date.now() - tLoad) / 1000).toFixed(1)} sn`);
   await page.screenshot({ path: join(out, '01-live-idle.png') });
 
@@ -216,6 +214,14 @@ try {
     check('Kaydedilen kişi kamerada adıyla tanınır', named.includes('Serkan Bilge'), JSON.stringify(named));
     await page.screenshot({ path: join(out, '06-quick-enroll.png') });
   }
+
+  // Uygulama yeniden açıldığında yine PIN sorulmaz ve kayıtlar yerinde
+  await page.reload();
+  await page.waitForSelector('#app:not([hidden]), #login-form:not([hidden])', { timeout: 180_000 });
+  check('Yeniden açılışta PIN sorulmaz', await page.$eval('#login-form', (el) => el.hidden));
+  await page.waitForSelector('#app:not([hidden])', { timeout: 180_000 });
+  await page.click('#btn-camera').catch(() => {});
+  await page.waitForTimeout(3000);
 
   // Okunan plaka araç listesine otomatik eklenir (fotoğraf ve renk ile); sonra elle tamamlanır
   await page.click('[data-tab=vehicles]');

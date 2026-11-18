@@ -9,7 +9,7 @@
  * Başarılı giriş = DEK'in çözülebilmesi. Ardışık hatalı girişlerde artan bekleme süresi uygulanır.
  */
 import { db, getMeta, setMeta } from './db.js';
-import { generateDek, wrapDek, unwrapDek } from './crypto.js';
+import { generateDek, wrapDek, unwrapDek, toB64, fromB64 } from './crypto.js';
 
 export const ROLES = {
   admin: { label: 'Yönetici', can: ['live', 'events', 'personnel', 'vehicles', 'users', 'settings', 'audit', 'export'] },
@@ -81,6 +81,7 @@ async function userForPin(pin, { includeDisabled = false } = {}) {
     .filter((u) => includeDisabled || !u.disabled)
     .sort((a, b) => (a.role === 'admin' ? -1 : 1) - (b.role === 'admin' ? -1 : 1));
   for (const u of users) {
+    if (!u.wrap) continue; // PIN'siz hesap
     try {
       const dek = await unwrapDek(u.wrap, pin, u.role === 'admin');
       return { user: u, dek };
@@ -89,21 +90,75 @@ async function userForPin(pin, { includeDisabled = false } = {}) {
   return null;
 }
 
-/** İlk kurulum: yönetici hesabı ve veri anahtarı oluşturur. */
-export async function setupAdmin(pin) {
+/**
+ * İlk kurulum: yönetici hesabı ve veri anahtarı oluşturur.
+ * PIN verilmezse hesap PIN'siz açılır ve uygulama bu cihazda otomatik giriş yapar.
+ */
+export async function setupAdmin(pin = null) {
   if (await isSetupDone()) throw new Error('Kurulum zaten yapılmış.');
-  validatePin(pin);
+  if (pin != null) validatePin(pin);
   const dek = await generateDek();
-  const wrap = await wrapDek(dek, pin);
+  const wrap = pin != null ? await wrapDek(dek, pin) : null;
   const user = {
     id: crypto.randomUUID(), username: 'Yönetici', role: 'admin', wrap,
     createdAt: Date.now(), disabled: false,
   };
   await db.put('users', user);
-  await setMeta('setup', { createdAt: Date.now(), version: 2, auth: 'pin' });
-  const usable = await unwrapDek(wrap, pin, true);
+  await setMeta('setup', { createdAt: Date.now(), version: 3, auth: pin != null ? 'pin' : 'device' });
   session.user = publicUser(user);
-  session.dek = usable;
+  session.dek = dek; // yönetici anahtarı yeni kullanıcılara sarılabilmek için dışa aktarılabilir tutulur
+  touch();
+  if (pin == null) await enableAutoLogin();
+  return session.user;
+}
+
+/* ------------------------------------------------- CİHAZDA OTOMATİK GİRİŞ */
+
+/**
+ * Otomatik giriş: veri anahtarı (DEK), bu cihazın tarayıcı deposunda tutulan ve DIŞA AKTARILAMAYAN
+ * bir cihaz anahtarıyla sarılır. Veriler diskte yine şifreli durur; ancak uygulamayı bu telefonda açan
+ * herkes kayıtlara erişir. Koruma telefonun kendi ekran kilidine kalır.
+ */
+async function deviceKey(create) {
+  let k = await getMeta('deviceKey');
+  if (!k && create) {
+    k = await crypto.subtle.generateKey({ name: 'AES-KW', length: 256 }, false, ['wrapKey', 'unwrapKey']);
+    await setMeta('deviceKey', k);
+  }
+  return k;
+}
+
+export async function isAutoLoginEnabled() {
+  return !!(await getMeta('autoLogin'));
+}
+
+export async function enableAutoLogin() {
+  if (!session.user || session.user.role !== 'admin') throw new Error('Otomatik giriş yalnızca yönetici için açılabilir.');
+  const k = await deviceKey(true);
+  const wrapped = await crypto.subtle.wrapKey('raw', session.dek, k, 'AES-KW');
+  await setMeta('autoLogin', { userId: session.user.id, wrapped: toB64(wrapped), at: Date.now() });
+}
+
+export async function disableAutoLogin() {
+  const u = await db.get('users', session.user?.id);
+  if (!u?.wrap) throw new Error('Önce bir PIN belirleyin; aksi halde uygulamaya giriş yapılamaz.');
+  await db.delete('meta', 'autoLogin');
+}
+
+/** Cihazda otomatik giriş açıksa PIN sormadan oturum açar; değilse null döner. */
+export async function tryAutoLogin() {
+  const a = await getMeta('autoLogin');
+  const k = a && await deviceKey(false);
+  if (!a || !k) return null;
+  const u = await db.get('users', a.userId);
+  if (!u || u.disabled) return null;
+  try {
+    session.dek = await crypto.subtle.unwrapKey('raw', fromB64(a.wrapped), k, 'AES-KW',
+      { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+  } catch {
+    return null;
+  }
+  session.user = publicUser(u);
   touch();
   return session.user;
 }
@@ -137,6 +192,7 @@ export async function login(pin) {
 /** Oturumdaki kullanıcının PIN'ini doğrular (yönetim ekranları için yeniden onay). */
 export async function verifyOwnPin(pin) {
   const u = await db.get('users', session.user.id);
+  if (!u.wrap) return true; // PIN'siz hesap
   try {
     session.dek = await unwrapDek(u.wrap, pin, u.role === 'admin');
     touch();
@@ -205,7 +261,8 @@ export async function changeOwnPassword(oldPw, newPw) {
   const other = await userForPin(newPw, { includeDisabled: true });
   if (other && other.user.id !== session.user.id) throw new Error('Bu PIN başka bir kullanıcıda kullanılıyor.');
   const u = await db.get('users', session.user.id);
-  const dek = await unwrapDek(u.wrap, oldPw, true).catch(() => null);
+  // PIN'siz hesapta ilk PIN belirlenirken eski PIN sorulmaz
+  const dek = u.wrap ? await unwrapDek(u.wrap, oldPw, true).catch(() => null) : session.dek;
   if (!dek) throw new Error('Mevcut PIN hatalı.');
   u.wrap = await wrapDek(dek, newPw);
   await db.put('users', u);

@@ -64,6 +64,10 @@ Rastgele DEK (AES-GCM 256) ◄────────────────�
 - Her kullanıcının kaydında DEK, **o kullanıcının parolasıyla** sarılmış olarak durur. Parola saklanmaz.
 - Giriş = DEK'in çözülebilmesi. DEK yalnızca oturum açıkken bellekte tutulur; görevli oturumlarında
   dışa aktarılamaz (`extractable: false`).
+- **PIN'siz kullanım (varsayılan):** DEK ayrıca bu cihazın tarayıcı deposunda tutulan, dışa aktarılamayan bir
+  cihaz anahtarıyla (AES-KW) sarılır ve uygulama açılışta otomatik giriş yapar. Veriler diskte şifreli kalır,
+  ancak telefonu açabilen herkes uygulamaya girebilir; koruma telefonun ekran kilidine kalır. Ayarlar → Giriş →
+  "Uygulama açılırken PIN sor" ile kapatılabilir (önce PIN belirlenmelidir). Cihaz anahtarı yedeğe girmez.
 - Hatalı girişlerde 3. denemeden sonra artan bekleme (15 sn'den 15 dk'ya kadar).
 - **Uyarı:** 4 haneli PIN yalnızca 10.000 olasılıktır. Uygulama içinde bekleme süreleri tahmini engeller, ancak
   telefonun dosyalarına doğrudan erişen biri şifreli veritabanını bilgisayarda kısa sürede çözebilir. Telefonun
