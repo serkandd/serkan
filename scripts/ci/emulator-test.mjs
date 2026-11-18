@@ -84,6 +84,8 @@ if (shot.result?.data) writeFileSync('webview.png', Buffer.from(shot.result.data
 await waitFor(`(() => { const d = [...document.querySelectorAll('#diag dt')]; return true; })()`, 1000);
 await sleep(15_000);
 console.log('Yedek durumu:', await evaluate(`JSON.stringify((window.__backupStatus && window.__backupStatus()) || null)`));
+console.log('Capacitor:', await evaluate(`JSON.stringify({ native: window.Capacitor?.isNativePlatform?.(), fsAvail: window.Capacitor?.isPluginAvailable?.('Filesystem'), plugins: Object.keys(window.Capacitor?.Plugins || {}), backupAvail: window.__backup?.autoBackupAvailable() })`));
+console.log('Elle yedek:', await evaluate(`window.__backup.writeBackupToDevice().then((r) => 'OK ' + JSON.stringify(r), (e) => 'HATA ' + (e?.message || e) + ' ' + JSON.stringify(e))`));
 console.log('--- Konsol ---');
 for (const l of logs) console.log(l);
 ws.close();

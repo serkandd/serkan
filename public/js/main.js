@@ -406,6 +406,7 @@ async function loadModels() {
   window.__analyzer = state.analyzer; // tanılama / uçtan uca testler için
   window.__app = state;
   window.__backupStatus = backup.backupStatus;
+  window.__backup = backup;
   wireAnalyzer();
   wireCamera();
 }
