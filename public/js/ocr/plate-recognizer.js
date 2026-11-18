@@ -6,7 +6,7 @@
  * - Olasılıklar Türk plaka formatına göre çözülür (decodeTurkishPlate); kareler arası birleştirme
  *   için ham olasılık matrisi de döndürülür.
  */
-import { createSession, loadOrt } from '../detection/yolo-detector.js';
+import { createSession, loadOrt, runSession } from '../detection/yolo-detector.js';
 import { decodeTurkishPlate } from './turkish-plate.js';
 
 const MANIFEST = new URL('../../models/plate-ocr/manifest.json', import.meta.url).href;
@@ -58,7 +58,7 @@ export class PlateRecognizer {
       }
     });
     const t0 = performance.now();
-    const out = await this.session.run({ [this.inputName]: new this.ort.Tensor('uint8', buf, [n, h, w, 3]) });
+    const out = await runSession(this.session, { [this.inputName]: new this.ort.Tensor('uint8', buf, [n, h, w, 3]) });
     this.lastMs = performance.now() - t0;
     const all = out[this.plateOutput].data;
     const per = slots * alphabet.length;

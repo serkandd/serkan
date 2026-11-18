@@ -5,7 +5,7 @@
  * biçimindedir (örn. "Renault|Clio"). Model yoksa marka/model alanları elle doldurulur.
  * Eğitim: scripts/train_vehicle_make_model.py
  */
-import { loadOrt, createSession } from './yolo-detector.js';
+import { loadOrt, createSession, runSession } from './yolo-detector.js';
 
 const MANIFEST = new URL('../../models/vehicle-make/manifest.json', import.meta.url).href;
 
@@ -46,7 +46,7 @@ export class VehicleMakeClassifier {
     for (let i = 0, j = 0; i < area; i++, j += 4) {
       f[i] = data[j] / 255; f[i + area] = data[j + 1] / 255; f[i + 2 * area] = data[j + 2] / 255;
     }
-    const out = await this.session.run({ [this.inputName]: new this.ort.Tensor('float32', f, [1, 3, S, S]) });
+    const out = await runSession(this.session, { [this.inputName]: new this.ort.Tensor('float32', f, [1, 3, S, S]) });
     const p = out[this.outputName].data;
     let best = 0;
     for (let i = 1; i < p.length; i++) if (p[i] > p[best]) best = i;

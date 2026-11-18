@@ -12,7 +12,53 @@ import { nms } from '../vision/imgproc.js';
 import { fetchBinary } from '../util/fetch-binary.js';
 
 let ortPromise = null;
-export const runtimeInfo = { provider: 'wasm', threads: 1 };
+export const runtimeInfo = { provider: 'wasm', threads: 1, gpuFailed: false };
+
+/**
+ * Hesaplama tercihi: 'cpu' (varsayılan) | 'gpu' (deneysel).
+ * İşlemci modunda modeller ayrı bir worker'da çalışır ve arayüzü asla kilitlemez. WebGPU modunda iş GPU'ya
+ * gider ama hazırlık ve bazı adımlar ana iş parçacığında yürür; bazı telefonlarda donmaya yol açabilir.
+ * GPU daha önce hata verdiyse işlemci kullanılır.
+ */
+function computePreference() {
+  try {
+    if (localStorage.getItem('ga.gpuBroken') === '1') return 'cpu';
+    return localStorage.getItem('ga.compute') === 'gpu' ? 'gpu' : 'cpu';
+  } catch {
+    return 'cpu';
+  }
+}
+
+export function setComputePreference(mode) {
+  try {
+    localStorage.setItem('ga.compute', mode);
+    localStorage.removeItem('ga.gpuBroken');
+  } catch { /* yok say */ }
+}
+
+/**
+ * Tüm model çalıştırmaları tek sıradan geçer.
+ * Aynı model (ör. yüz algılayıcı) canlı analiz ve "Yüzümü kaydet" tarafından aynı anda çağrılırsa
+ * ONNX Runtime hata verir veya takılır; sıra bunu önler. Her çalıştırmaya zaman sınırı konur.
+ */
+let runQueue = Promise.resolve();
+let gpuErrors = 0;
+export function runSession(session, feeds, { timeoutMs = 20_000 } = {}) {
+  const job = runQueue.then(() => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Model yanıt vermedi (zaman aşımı)')), timeoutMs);
+    session.run(feeds).then((r) => { clearTimeout(timer); resolve(r); }, (e) => { clearTimeout(timer); reject(e); });
+  }));
+  runQueue = job.catch(() => {});
+  return job.catch((e) => {
+    if (runtimeInfo.provider === 'webgpu' && ++gpuErrors >= 3 && !runtimeInfo.gpuFailed) {
+      // GPU sürücüsü sorun çıkarıyor: bir sonraki açılışta işlemciye geç
+      runtimeInfo.gpuFailed = true;
+      try { localStorage.setItem('ga.gpuBroken', '1'); } catch { /* yok say */ }
+      self.dispatchEvent?.(new CustomEvent('ga-gpu-failed', { detail: String(e?.message || e) }));
+    }
+    throw e;
+  });
+}
 
 async function webgpuUsable() {
   try {
@@ -32,7 +78,8 @@ export async function loadOrt() {
       const cores = navigator.hardwareConcurrency || 4;
       ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.max(1, Math.min(4, Math.floor(cores / 2))) : 1;
       ort.env.logLevel = 'error';
-      const gpu = await webgpuUsable();
+      const pref = computePreference();
+      const gpu = pref === 'gpu' && await webgpuUsable();
       // WebGPU ana iş parçacığında çalışır (iş GPU'da); WASM ise UI'ı bloklamasın diye proxy worker'da
       ort.env.wasm.proxy = !gpu;
       runtimeInfo.provider = gpu ? 'webgpu' : 'wasm';
@@ -98,7 +145,7 @@ export class YoloDetector {
     this.outputName = this.session.outputNames[0];
     const s = this.inputSize;
     const dummy = new this.ort.Tensor('float32', new Float32Array(3 * s * s), [1, 3, s, s]);
-    await this.session.run({ [this.inputName]: dummy }); // ısınma (GPU gölgelendirici derleme)
+    await runSession(this.session, { [this.inputName]: dummy }, { timeoutMs: 60_000 }); // ısınma (GPU gölgelendirici derleme)
     this.ready = true;
   }
 
@@ -141,7 +188,7 @@ export class YoloDetector {
     const t0 = performance.now();
     try {
       const { tensor, scale, px, py, r, SW, SH } = this._preprocess(source, region);
-      const out = await this.session.run({ [this.inputName]: tensor });
+      const out = await runSession(this.session, { [this.inputName]: tensor });
       const o = out[this.outputName];
       const d = o.data;
       const toFrame = (x1, y1, x2, y2) => {

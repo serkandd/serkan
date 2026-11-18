@@ -11,7 +11,7 @@
  *
  * Arayüz eski FaceEngine ile aynıdır (detect / describe / describeStill / enrollFromImage).
  */
-import { createSession, loadOrt, runtimeInfo } from './yolo-detector.js';
+import { createSession, loadOrt, runtimeInfo, runSession } from './yolo-detector.js';
 import { laplacianVariance, toGray, nms } from '../vision/imgproc.js';
 
 const BASE = new URL('../../models/face-onnx/', import.meta.url).href;
@@ -122,7 +122,7 @@ export class FaceEngineOnnx {
       f[i + area] = (data[j + 1] - 127.5) / 128;
       f[i + 2 * area] = (data[j + 2] - 127.5) / 128;
     }
-    const out = await this.det.run({ [this.detIn]: new this.ort.Tensor('float32', f, [1, 3, S, S]) });
+    const out = await runSession(this.det, { [this.detIn]: new this.ort.Tensor('float32', f, [1, 3, S, S]) });
     const o = this.detOut.map((n) => out[n].data);
     const faces = [];
     [8, 16, 32].forEach((stride, si) => {
@@ -201,7 +201,7 @@ export class FaceEngineOnnx {
         }
       }
     });
-    const out = await this.rec.run({ [this.recIn]: new this.ort.Tensor('float32', f, [n, 3, 112, 112]) });
+    const out = await runSession(this.rec, { [this.recIn]: new this.ort.Tensor('float32', f, [n, 3, 112, 112]) });
     const e = out[this.recOut].data;
     const D = e.length / n;
     const res = [];

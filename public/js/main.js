@@ -7,7 +7,7 @@ import * as auth from './storage/auth.js';
 import * as repo from './storage/repos.js';
 import { CameraManager } from './camera/camera.js';
 import { FaceEngine } from './detection/face-engine.js';
-import { YoloDetector, COCO_VEHICLE_CLASSES, runtimeInfo } from './detection/yolo-detector.js';
+import { YoloDetector, COCO_VEHICLE_CLASSES, runtimeInfo, setComputePreference } from './detection/yolo-detector.js';
 import { FaceEngineOnnx } from './detection/face-engine-onnx.js';
 import { PlateRecognizer } from './ocr/plate-recognizer.js';
 import { PlateOcr } from './ocr/plate-ocr.js';
@@ -525,48 +525,72 @@ function updateQuickEnroll() {
 
 const qe = { frames: [], descriptors: [], photo: null };
 
-/** Kareyi dondurur: birkaç kare çeker, en büyük yüzü bulur ve önizlemeyi gösterir */
+function withTimeoutMsg(promise, ms, msg) {
+  let t;
+  return Promise.race([promise.finally(() => clearTimeout(t)), new Promise((_, rej) => { t = setTimeout(() => rej(new Error(msg)), ms); })]);
+}
+
+/** Kareyi dondurur: kareleri çeker, en büyük yüzü bulur ve önizlemeyi gösterir. Hata olursa ekran takılı kalmaz. */
 async function captureFace() {
   const video = $('#video');
   const msg = $('#qe-msg');
-  const W = video.videoWidth, H = video.videoHeight;
-  if (!W || !H) return;
+  const save = $('#qe-save');
+  const retake = $('#qe-retake');
+  save.disabled = true;
+  retake.disabled = true;
   qe.frames = []; qe.descriptors = []; qe.photo = null;
-  // İlk kare hemen (ekranda bu donar), sonra kısa aralıklarla iki kare daha
-  for (let i = 0; i < 3; i++) {
-    const c = document.createElement('canvas');
-    c.width = W; c.height = H;
-    c.getContext('2d').drawImage(video, 0, 0, W, H);
-    qe.frames.push(c);
-    if (i === 0) drawPreview(c, null);
-    if (i < 2) await new Promise((r) => setTimeout(r, 220));
-  }
-  $('#qe-save').disabled = true;
-  msg.className = 'tiny muted';
-  msg.textContent = 'Yüz inceleniyor…';
-  let shown = false, lastReason = '';
-  for (const c of qe.frames) {
-    const r = await state.face.describeStill(c, { minSize: 60 });
-    if (r.descriptor) {
-      qe.descriptors.push(r.descriptor);
-      if (!shown) {
-        drawPreview(c, r.box);
-        qe.photo = faceThumbDataUrl(c, r.box);
-        shown = true;
-      }
-    } else {
-      lastReason = r.reason;
-      if (!shown && r.box) drawPreview(c, r.box, true);
+  try {
+    const W = video.videoWidth, H = video.videoHeight;
+    if (!W || !H) throw new Error('Kamera görüntüsü yok. Kamerayı açıp tekrar deneyin');
+    // Önce tüm kareleri çek (görüntü donar), sonra incele
+    for (let i = 0; i < 3; i++) {
+      const c = document.createElement('canvas');
+      c.width = W; c.height = H;
+      c.getContext('2d').drawImage(video, 0, 0, W, H);
+      qe.frames.push(c);
+      if (i === 0) drawPreview(c, null);
+      if (i < 2) await new Promise((r) => setTimeout(r, 180));
     }
-  }
-  if (qe.descriptors.length) {
-    msg.className = 'tiny';
-    msg.textContent = `Yüz hazır (${qe.descriptors.length} kare). Adınızı yazıp Kaydet'e basın.`;
-    $('#qe-save').disabled = false;
-    $('#qe-name').focus();
-  } else {
+    msg.className = 'tiny muted';
+    msg.textContent = 'Yüz inceleniyor…';
+    let shown = false, lastReason = '';
+    for (const c of qe.frames) {
+      let r;
+      try {
+        r = await withTimeoutMsg(state.face.describeStill(c, { minSize: 50 }), 20_000, 'İnceleme çok uzun sürdü');
+      } catch (e) {
+        lastReason = e.message;
+        continue;
+      }
+      if (r.descriptor) {
+        qe.descriptors.push(r.descriptor);
+        if (!shown) {
+          drawPreview(c, r.box);
+          qe.photo = faceThumbDataUrl(c, r.box);
+          shown = true;
+        }
+      } else {
+        lastReason = r.reason;
+        if (!shown && r.box) drawPreview(c, r.box, true);
+      }
+      // İlk iki karede yüz bulunduysa üçüncüyü beklemeye gerek yok
+      if (qe.descriptors.length >= 2) break;
+    }
+    if (qe.descriptors.length) {
+      msg.className = 'tiny';
+      msg.textContent = `Yüz hazır (${qe.descriptors.length} kare). Adınızı yazıp Kaydet'e basın.`;
+      save.disabled = false;
+      $('#qe-name').focus();
+    } else {
+      msg.className = 'tiny error';
+      msg.textContent = `${lastReason || 'Yüz bulunamadı'}. Yüzünüz ekranın ortasında ve aydınlık olacak şekilde "Tekrar çek"e basın.`;
+    }
+  } catch (e) {
+    console.error('Yüz yakalama hatası', e);
     msg.className = 'tiny error';
-    msg.textContent = `${lastReason || 'Yüz bulunamadı'}. "Tekrar çek" ile yeniden deneyin.`;
+    msg.textContent = `Hata: ${e.message}. "Tekrar çek" ile yeniden deneyin.`;
+  } finally {
+    retake.disabled = false;
   }
 }
 
@@ -602,12 +626,15 @@ function faceThumbDataUrl(src, box) {
 }
 
 $('#qe-capture').addEventListener('click', async () => {
-  if (!state.face?.recognitionReady) { toast('Yüz tanıma modeli yüklenemedi.', 'error'); return; }
+  if (!state.face?.recognitionReady) { toast('Yüz tanıma modeli yüklenemedi. Ayarlar → Sistem Tanılama\'ya bakın.', 'error'); return; }
   $('#qe-name').value = '';
   $('#qe-msg').textContent = '';
+  // Kayıt sırasında canlı analiz durur: telefonun tüm gücü kayda ayrılır, takılma olmaz
+  state.analyzer?.pause();
   $('#qe-dialog').showModal();
   await captureFace();
 });
+$('#qe-dialog').addEventListener('close', () => state.analyzer?.resume());
 $('#qe-retake').addEventListener('click', () => captureFace());
 $('#qe-cancel').addEventListener('click', () => $('#qe-dialog').close());
 
@@ -616,7 +643,7 @@ $('#qe-form').addEventListener('submit', async (e) => {
   const name = $('#qe-name').value.trim().replace(/\s+/g, ' ');
   const msg = $('#qe-msg');
   if (name.length < 2) { msg.className = 'tiny error'; msg.textContent = 'Lütfen ad soyad yazın.'; return; }
-  if (!qe.descriptors.length) return;
+  if (!qe.descriptors.length) { msg.className = 'tiny error'; msg.textContent = 'Önce yüz yakalanmalı: "Tekrar çek"e basın.'; return; }
   $('#qe-save').disabled = true;
   try {
     const existing = repo.personnel().find((p) => p.fullName.toLocaleLowerCase('tr') === name.toLocaleLowerCase('tr'));
@@ -634,6 +661,7 @@ $('#qe-form').addEventListener('submit', async (e) => {
     // Ekrandaki yüzler yeni kayda göre hemen yeniden doğrulansın
     for (const tr of state.analyzer.faceTracker.tracks) tr.data = {};
     $('#qe-dialog').close();
+    renderPersonnel();
     toast(`${name} kaydedildi. Artık kamerada bu isimle tanınacak.`, 'ok', 5000);
     renderPersonnel();
   } catch (ex) {
@@ -674,6 +702,12 @@ async function migrateFaceTemplates() {
   if (migrated) toast(`${migrated} kişinin yüz şablonu yeni tanıma modeline aktarıldı.`, 'ok', 6000);
   if (stale.length) toast(`${stale.map((p) => p.fullName).join(', ')}: yüz kaydını yenileyin (Yüzümü kaydet).`, 'warn', 9000);
 }
+
+// GPU sürücüsü art arda hata verirse uygulama işlemci moduna geçerek yeniden başlar
+self.addEventListener('ga-gpu-failed', () => {
+  toast('Telefonun GPU\'su modelleri çalıştırırken hata verdi. Uygulama işlemci moduna geçiyor…', 'warn', 4000);
+  setTimeout(() => location.reload(), 2500);
+});
 
 function wireAnalyzer() {
   // Uyarlanabilir öğrenme: güvenle tanınan kişiye yeni görünüm şablonu ekle
@@ -1274,6 +1308,11 @@ async function renderAudit() {
     <br><span class="tiny">${esc(JSON.stringify(r.details))}</span></li>`).join('') || '<li>Kayıt yok</li>';
 }
 
+$('#compute-mode').addEventListener('change', async (e) => {
+  setComputePreference(e.target.value);
+  if (await confirmBox('Hesaplama yöntemi değişti. Uygulama yeniden başlatılsın mı?', 'Yeniden başlat')) location.reload();
+});
+
 $('[data-action=audit-verify]').addEventListener('click', async () => {
   const r = await repo.verifyAuditChain();
   toast(r.ok ? `İşlem kaydı zinciri sağlam (${r.total} kayıt).` : `UYARI: ${r.broken} tutarsızlık bulundu! Kayıtlar değiştirilmiş olabilir.`, r.ok ? 'ok' : 'error', 6000);
@@ -1338,6 +1377,9 @@ async function renderDiag() {
     ['Kayıtlar', `${repo.personnel().length} personel · ${repo.vehicles().length} araç`],
   ];
   $('#diag').innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
+  let pref = 'cpu';
+  try { pref = localStorage.getItem('ga.compute') === 'gpu' ? 'gpu' : 'cpu'; } catch { /* yok say */ }
+  $('#compute-mode').value = pref;
 }
 
 /* ========================================================= CANLI KONTROLLER */

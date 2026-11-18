@@ -125,8 +125,13 @@ export class Analyzer extends EventTarget {
     this._setStatus('plate', 'idle', 'Durduruldu');
   }
 
+  /** Yüz kaydı gibi işlemler sırasında canlı analizi geçici olarak durdurur (işlemci/GPU serbest kalır) */
+  pause() { this.paused = true; }
+  resume() { this.paused = false; }
+
   _videoReady() {
     const v = this.video;
+    if (this.paused) return false;
     return v.readyState >= 2 && v.videoWidth > 0 && !v.paused && document.visibilityState === 'visible';
   }
 
@@ -407,7 +412,8 @@ export class Analyzer extends EventTarget {
     const scans = [null,
       horiz ? { x: 0, y: 0, w: T, h: H } : { x: 0, y: 0, w: W, h: T },
       horiz ? { x: W - T, y: 0, w: T, h: H } : { x: 0, y: H - T, w: W, h: T }];
-    regions.push(scans[cycle % 3]);
+    // Araç varken plaka zaten araç bölgesinde aranır; genel tarama seyrekleşir (telefon yükü azalır)
+    if (!regions.length || cycle % 3 === 0) regions.push(scans[Math.floor(cycle / (regions.length ? 3 : 1)) % 3]);
 
     let found = [];
     for (const region of regions) {

@@ -36,7 +36,9 @@ const sceneB64 = readFileSync(join(root, 'tests/fixtures/scene-four-people.jpg')
 const results = [];
 const check = (name, ok, detail = '') => { results.push({ name, ok, detail }); console.log(`${ok ? '✔' : '✘'} ${name}${detail ? ` — ${detail}` : ''}`); };
 
-const browser = await playwright.chromium.launch({ args: ['--use-fake-ui-for-media-stream', '--enable-unsafe-swiftshader'] });
+// WEBGPU=1 npm run e2e → modeller (yazılım tabanlı) WebGPU ile çalışır; telefondaki GPU yolunu test eder
+const gpuArgs = process.env.WEBGPU ? ['--enable-unsafe-webgpu', '--enable-features=Vulkan', '--use-angle=swiftshader', '--use-webgpu-adapter=swiftshader'] : [];
+const browser = await playwright.chromium.launch({ args: ['--use-fake-ui-for-media-stream', '--enable-unsafe-swiftshader', ...gpuArgs] });
 const context = await browser.newContext({ viewport: { width: 412, height: 915 }, deviceScaleFactor: 1, permissions: ['camera'] });
 
 await context.addInitScript(({ sceneB64 }) => {
@@ -235,6 +237,17 @@ try {
 
   const overflow = await page.evaluate(() => ({ sw: document.body.scrollWidth, w: window.innerWidth, ctl: [...document.querySelectorAll('.controls .ctl')].every((b) => b.getBoundingClientRect().right <= window.innerWidth) }));
   check('Telefon genişliğinde (412px) yatay taşma yok', overflow.sw <= overflow.w && overflow.ctl, JSON.stringify(overflow));
+  // Arayüz akıcılığı: analiz çalışırken 6 sn boyunca ekran karelerinin arası (donma süresi)
+  const jank = await page.evaluate(() => new Promise((resolve) => {
+    let last = performance.now(), worst = 0, frames = 0;
+    const t0 = last;
+    const tick = (now) => {
+      worst = Math.max(worst, now - last); last = now; frames++;
+      if (now - t0 < 6000) requestAnimationFrame(tick); else resolve({ worst: Math.round(worst), fps: Math.round(frames / 6) });
+    };
+    requestAnimationFrame(tick);
+  }));
+  check('Analiz sırasında arayüz donmuyor', jank.worst < 700, `en uzun donma ${jank.worst} ms, ekran ${jank.fps} fps`);
   const perf = await page.$eval('#chip-perf', (el) => el.textContent);
   check('Performans göstergesi', /fps/.test(perf), perf);
 
