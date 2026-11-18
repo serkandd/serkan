@@ -225,6 +225,9 @@ try {
   const hasPhoto = await page.$eval('#vehicle-list .vthumb img', () => true).catch(() => false);
   check('Araç kaydında araç fotoğrafı var', hasPhoto);
   await page.click('#vehicle-list .rec');
+  const seen = await page.$eval('#vehicle-seen', (el) => el.textContent);
+  const diagModels = await page.evaluate(() => window.__app.models.vehicleMake);
+  check('Araç görüntüsünden marka/model/tür/renk tahmini çalıştı', /Görüntüden tahmin/.test(seen), `${diagModels} · ${seen.slice(seen.indexOf('Görüntüden')).slice(0, 140)}`);
   await page.fill('#vehicle-form [name=owner]', 'Serkan Bilge');
   await page.fill('#vehicle-form [name=company]', 'Sade Ekonomi');
   await page.fill('#vehicle-form [name=brand]', 'Renault');

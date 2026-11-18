@@ -9,6 +9,7 @@ Tüm modeller `public/models/` ve `public/vendor/` altında yereldir; çalışma
 | Araç algılama | YOLOv8n COCO, 416×416 | 12 MB | Ultralytics — AGPL-3.0 |
 | Plaka algılama | YOLOv9-t license-plate end2end, 384×384 | 7.8 MB | open-image-models — MIT |
 | Plaka OCR | fast-plate-ocr CCT-S v2 global (Türkiye dahil 60+ ülke) | 5.3 MB | fast-plate-ocr — MIT |
+| Araç marka/model, kasa tipi, renk | CLIP ViT-B/32 görüntü kodlayıcı (int8), sıfır-atış; 212 marka-model, 12 kasa tipi, 14 renk | 88 MB | OpenAI CLIP — MIT (ONNX: Jina AI) |
 | Yedek yüz motoru | face-api (TinyFaceDetector, SSD, FaceRecognitionNet) | 12 MB | MIT |
 | Yedek plaka okuma | Klasik plaka bulucu + Tesseract LSTM | 3 MB | Apache-2.0 |
 

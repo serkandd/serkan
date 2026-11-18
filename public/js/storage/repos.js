@@ -79,14 +79,20 @@ export async function listAudit(limit = 200) {
 
 /** Hash zincirini doğrular. Saklama süresiyle silinen ilk kayıtlar zincir başlangıcını kaydırır. */
 export async function verifyAuditChain() {
-  const rows = (await db.getAll('audit')).sort((a, b) => a.ts - b.ts);
+  // Sıra zaman damgasıyla değil zincir bağlantısıyla (prev → hash) kurulur: aynı milisaniyede yazılan
+  // kayıtlar yanlış sıralanıp yanlış alarm üretmez.
+  const rows = await db.getAll('audit');
   let broken = 0;
-  for (let i = 0; i < rows.length; i++) {
-    const r = rows[i];
-    const h = await sha256Hex(r.prev + r.ts + r.enc.iv + r.enc.ct);
-    if (h !== r.hash) broken++;
-    if (i > 0 && rows[i - 1].hash !== r.prev) broken++;
+  for (const r of rows) {
+    if ((await sha256Hex(r.prev + r.ts + r.enc.iv + r.enc.ct)) !== r.hash) broken++;
   }
+  const byPrev = new Map();
+  for (const r of rows) byPrev.set(r.prev, (byPrev.get(r.prev) || 0) + 1);
+  const hashes = new Set(rows.map((r) => r.hash));
+  // Başlangıç: önceki kaydı listede olmayan kayıt (ilk kayıt veya saklama süresiyle silinenlerden sonraki)
+  const starts = rows.filter((r) => !hashes.has(r.prev)).length;
+  if (rows.length && starts !== 1) broken += Math.abs(starts - 1) || 1;
+  for (const n of byPrev.values()) if (n > 1) broken += n - 1; // dallanma = araya kayıt sokulmuş
   return { total: rows.length, broken, ok: broken === 0 };
 }
 
@@ -237,6 +243,8 @@ function vehicleRecord(v, prev = {}) {
     lastSeen: v.lastSeen ?? prev.lastSeen ?? null,
     seenCount: v.seenCount ?? prev.seenCount ?? 0,
     autoCreated: prev.autoCreated ?? v.autoCreated ?? false,
+    autoFields: v.autoFields ?? prev.autoFields ?? {},
+    attrs: v.attrs ?? prev.attrs ?? null,
     createdAt: prev.createdAt ?? Date.now(),
     createdBy: prev.createdBy ?? currentUser()?.username ?? 'sistem',
   };
@@ -255,7 +263,8 @@ export async function saveVehicle(v) {
   if (prev && prev.plateKey !== key) aliases.add(prev.plateKey);
   aliases.delete(key);
   const { id: _id, updatedAt: _u, ...prevRec } = prev || {};
-  const rec = vehicleRecord({ ...v, plateKey: key, aliases: [...aliases] }, prevRec);
+  // Kullanıcının kaydettiği değerler artık "otomatik tahmin" değildir
+  const rec = vehicleRecord({ ...v, plateKey: key, aliases: [...aliases], autoFields: {} }, prevRec);
   const id = v.id || crypto.randomUUID();
   await writeVehicle(id, rec);
   await audit(prev ? 'vehicle.update' : 'vehicle.create', id, {
@@ -280,6 +289,7 @@ export async function autoAddVehicle(info) {
     brand: info.brand || '', model: info.model || '',
     photo: info.photo || null, plateImage: info.plateImage || null,
     firstSeen: now, lastSeen: now, seenCount: 1, autoCreated: true,
+    autoFields: { color: !!info.color, vehicleType: !!info.vehicleType },
   });
   rec.createdBy = 'sistem';
   const id = crypto.randomUUID();
@@ -304,6 +314,32 @@ export async function recordVehicleSighting(id, info = {}) {
   if (!rec.vehicleType && info.vehicleType) rec.vehicleType = info.vehicleType;
   if (!rec.brand && info.brand) rec.brand = info.brand;
   if (!rec.model && info.model) rec.model = info.model;
+  await writeVehicle(id, rec);
+  await loadVehicles();
+  return vehicles().find((x) => x.id === id);
+}
+
+/**
+ * Görüntüden çıkarılan marka/model/tür/renk tahminlerini işler. Yalnızca boş ya da daha önce otomatik
+ * doldurulmuş alanlar güncellenir; kullanıcının girdiği bilgi değiştirilmez.
+ */
+export async function applyVehicleAttributes(id, a) {
+  const v = vehicles().find((x) => x.id === id);
+  if (!v) return null;
+  const { id: _id, updatedAt: _u, ...rec } = v;
+  rec.autoFields = { ...(rec.autoFields || {}) };
+  const fill = (field, value) => {
+    if (!value) return;
+    if (!rec[field] || rec.autoFields[field]) { rec[field] = value; rec.autoFields[field] = true; }
+  };
+  fill('brand', a.brand);
+  if (a.brand && (!rec.brand || rec.brand === a.brand)) fill('model', a.model);
+  fill('vehicleType', a.type);
+  fill('color', a.color);
+  rec.attrs = {
+    guess: a.guess, brandConf: +a.brandConf.toFixed(3), modelConf: +a.modelConf.toFixed(3),
+    typeConf: +a.typeConf.toFixed(3), colorConf: +a.colorConf.toFixed(3), at: Date.now(),
+  };
   await writeVehicle(id, rec);
   await loadVehicles();
   return vehicles().find((x) => x.id === id);

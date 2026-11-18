@@ -15,7 +15,7 @@ import { Analyzer } from './pipeline/analyzer.js';
 import { Overlay } from './ui/overlay.js';
 import { Alerts } from './ui/alerts.js';
 import { formatPlate } from './ocr/turkish-plate.js';
-import { VehicleMakeClassifier } from './detection/vehicle-make.js';
+import { VehicleAttributeClassifier } from './detection/vehicle-attributes.js';
 
 const VEHICLE_MODEL = new URL('../models/vehicle/yolov8n-416.onnx', import.meta.url).href;
 const PLATE_MANIFEST = new URL('../models/plate/manifest.json', import.meta.url).href;
@@ -342,14 +342,12 @@ async function loadModels() {
     }
   }
 
-  state.makeClassifier = new VehicleMakeClassifier();
-  try {
-    state.models.vehicleMake = (await withTimeout(state.makeClassifier.load(), 60_000, 'Marka/model modeli'))
-      ? 'hazır' : 'yok — marka ve model elle girilir';
-  } catch (e) {
-    console.error(e);
-    state.models.vehicleMake = `yüklenemedi: ${e.message}`;
-  }
+  // Marka/model/tür/renk modeli büyük (≈90 MB): uygulama açılışını bekletmeden arka planda yüklenir
+  state.vehicleAttrs = new VehicleAttributeClassifier();
+  state.models.vehicleMake = 'yükleniyor…';
+  withTimeout(state.vehicleAttrs.load(), 180_000, 'Araç özellik modeli')
+    .then(() => { state.models.vehicleMake = 'hazır (CLIP, marka/model/tür/renk tahmini)'; })
+    .catch((e) => { console.error(e); state.models.vehicleMake = `yüklenemedi: ${e.message}`; });
 
   state.plateWorker = new Worker(new URL('./workers/plate-worker.js', import.meta.url), { type: 'module' });
 
@@ -366,7 +364,6 @@ async function loadModels() {
     registry: { personnel: repo.personnel, findVehicleByPlate: repo.findVehicleByPlate },
   });
   state.overlay = new Overlay($('#overlay'), $('#video'), state.analyzer);
-  state.analyzer.makeClassifier = state.makeClassifier;
   window.__analyzer = state.analyzer; // tanılama / uçtan uca testler için
   window.__app = state;
   wireAnalyzer();
@@ -770,18 +767,36 @@ async function registerPlateSighting(d) {
   try {
     const info = {
       plate: d.plate, color: d.color || '', vehicleType: d.vehicleType || '',
-      brand: d.detectedMake?.brand || '', model: d.detectedMake?.model || '',
       photo: d.vehiclePhoto || null, plateImage: await blobToDataUrl(d.thumb),
     };
-    const v = repo.findVehicleByPlate(d.plate);
-    if (v) await repo.recordVehicleSighting(v.id, info);
+    let v = repo.findVehicleByPlate(d.plate);
+    if (v) v = await repo.recordVehicleSighting(v.id, info);
     else {
-      await repo.autoAddVehicle(info);
+      v = await repo.autoAddVehicle(info);
       toast(`Yeni araç listeye eklendi: ${d.plateFormatted}${d.color ? ` · ${d.color}` : ''}${d.vehicleType ? ` ${d.vehicleType}` : ''}`, 'info', 5000);
     }
     if (state.tab === 'vehicles') renderVehicles();
+    if (v) inferVehicleAttributes(v);
   } catch (e) {
     console.error('Araç kaydı güncellenemedi', e);
+  }
+}
+
+/** Araç fotoğrafından marka/model/tür/renk tahmini (her araç için bir kez, arka planda) */
+async function inferVehicleAttributes(v) {
+  if (!state.vehicleAttrs?.ready || !v.photo || v.attrs) return;
+  try {
+    const img = new Image();
+    img.src = v.photo;
+    await img.decode();
+    const a = await state.vehicleAttrs.classify(img);
+    if (!a) return;
+    const nv = await repo.applyVehicleAttributes(v.id, a);
+    const desc = [nv?.color, nv?.brand, nv?.model, nv?.vehicleType].filter(Boolean).join(' ');
+    if (desc) toast(`${v.plate}: ${desc} (otomatik tahmin)`, 'info', 5000);
+    if (state.tab === 'vehicles') renderVehicles();
+  } catch (e) {
+    console.error('Araç özellikleri tahmin edilemedi', e);
   }
 }
 
@@ -1098,7 +1113,9 @@ function renderVehicles() {
     const expired = v.validUntil && new Date(v.validUntil) < new Date();
     const li = document.createElement('li');
     li.className = 'rec vehicle-rec';
-    const desc = [v.color, v.brand, v.model, v.vehicleType].filter(Boolean).join(' ');
+    const auto = v.autoFields || {};
+    const desc = [v.color, v.brand, v.model, v.vehicleType].filter(Boolean).join(' ')
+      + (['brand', 'model', 'color', 'vehicleType'].some((k) => auto[k] && v[k]) ? ' (otomatik tahmin)' : '');
     const who = [v.owner, v.company].filter(Boolean).join(' · ');
     const tag = expired ? ['danger', 'Süresi doldu'] : [VEHICLE_TAG[v.status] || 'muted', repo.VEHICLE_STATUS[v.status] || v.status];
     li.innerHTML = `<div class="vthumb">${v.photo ? `<img src="${v.photo}" alt="">` : '<span>ARAÇ</span>'}</div>
@@ -1135,6 +1152,10 @@ function openVehicle(v = null) {
   if (v?.firstSeen) info.push(`İlk görülme: ${fmtTime(v.firstSeen)}`);
   if (v?.lastSeen) info.push(`Son görülme: ${fmtTime(v.lastSeen)} (${v.seenCount || 1} kez)`);
   if (v?.aliases?.length) info.push(`Eski okumalar da bu araçla eşleşir: ${v.aliases.map(formatPlate).join(', ')}`);
+  if (v?.attrs) {
+    const pc = (x) => `%${Math.round(x * 100)}`;
+    info.push(`Görüntüden tahmin: ${v.attrs.guess} (marka ${pc(v.attrs.brandConf)}, model ${pc(v.attrs.modelConf)}) · tür ${pc(v.attrs.typeConf)} · renk ${pc(v.attrs.colorConf)}. Yanlışsa düzeltip kaydedin.`);
+  }
   $('#vehicle-seen').textContent = info.join(' · ');
   $('#vehicle-dialog').showModal();
 }

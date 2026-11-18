@@ -664,7 +664,6 @@ export class Analyzer extends EventTarget {
     if (d.plate) {
       try {
         snap = this._vehicleSnapshot(track.box);
-        if (snap && this.makeClassifier?.ready) make = await this.makeClassifier.classify(snap.canvas).catch(() => null);
       } catch (e) {
         console.error('Araç görüntüsü alınamadı', e);
       }

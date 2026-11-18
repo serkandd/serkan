@@ -32,7 +32,7 @@ görüntü analiz uygulaması. Telefon kamerasından gelen canlı görüntüyü 
 **Yüz kaydı:** Kamerada yüz görülünce *Yüzümü kaydet* düğmesine basın; görüntü dondurulur, ad soyad yazıp kaydedin.
 **Araçlar:** Okunan her yeni plaka araç fotoğrafı, rengi ve türüyle *Araçlar* listesine otomatik eklenir ("Bilgi bekliyor").
 Kayda dokunup plakayı düzeltebilir, aracı kullananı, şirketi, marka ve modeli girebilirsiniz. Düzeltilen eski okuma da aynı araçla eşleşir.
-Marka/model otomatik tanıma için `scripts/train_vehicle_make_model.py` ile model eğitilmelidir (hazır model dahil değildir).
+Marka, model, kasa tipi ve renk araç fotoğrafından CLIP modeliyle otomatik tahmin edilir; yalnızca yeterince eminse yazılır ve "otomatik tahmin" olarak işaretlenir. Araç listesi `scripts/build_vehicle_clip.py` içinde genişletilebilir.
 
 APK, depoya her yeni sürüm gönderildiğinde GitHub Actions tarafından otomatik derlenir (`.github/workflows/android.yml`).
 
