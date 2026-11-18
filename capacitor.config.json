@@ -4,9 +4,11 @@
   "webDir": "public",
   "android": {
     "allowMixedContent": false,
-    "backgroundColor": "#0b1220"
+    "backgroundColor": "#0b1220",
+    "loggingBehavior": "none"
   },
   "server": {
     "androidScheme": "https"
-  }
+  },
+  "loggingBehavior": "none"
 }
